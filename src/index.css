@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 220 30% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 30% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 30% 10%;
+    --primary: 216 60% 25%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 15% 93%;
+    --secondary-foreground: 220 30% 10%;
+    --muted: 220 15% 95%;
+    --muted-foreground: 220 10% 50%;
+    --accent: 220 15% 93%;
+    --accent-foreground: 220 30% 10%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 15% 90%;
+    --input: 220 15% 90%;
+    --ring: 216 60% 25%;
+    --radius: 0.5rem;
+
+    --risk-red: 354 70% 54%;
+    --risk-yellow: 45 93% 47%;
+    --risk-green: 142 60% 40%;
+    --risk-blue: 213 80% 50%;
+    --risk-red-bg: 354 70% 96%;
+    --risk-yellow-bg: 45 93% 95%;
+    --risk-green-bg: 142 60% 95%;
+    --risk-blue-bg: 213 80% 95%;
+
+    --nav-bg: 216 50% 15%;
+    --nav-foreground: 220 15% 90%;
+    --nav-active: 216 60% 25%;
+
+    --sidebar-background: 216 50% 15%;
+    --sidebar-foreground: 220 15% 90%;
+    --sidebar-primary: 0 0% 100%;
+    --sidebar-primary-foreground: 216 50% 15%;
+    --sidebar-accent: 216 50% 20%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 216 40% 25%;
+    --sidebar-ring: 213 80% 50%;
+
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  .dark {
+    --background: 220 25% 8%;
+    --foreground: 220 15% 90%;
+    --card: 220 25% 12%;
+    --card-foreground: 220 15% 90%;
+    --popover: 220 25% 12%;
+    --popover-foreground: 220 15% 90%;
+    --primary: 213 80% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 20% 18%;
+    --secondary-foreground: 220 15% 90%;
+    --muted: 220 20% 18%;
+    --muted-foreground: 220 10% 55%;
+    --accent: 220 20% 18%;
+    --accent-foreground: 220 15% 90%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 20% 20%;
+    --input: 220 20% 20%;
+    --ring: 213 80% 55%;
+
+    --risk-red: 354 70% 54%;
+    --risk-yellow: 45 93% 47%;
+    --risk-green: 142 60% 40%;
+    --risk-blue: 213 80% 50%;
+    --risk-red-bg: 354 70% 15%;
+    --risk-yellow-bg: 45 93% 12%;
+    --risk-green-bg: 142 60% 12%;
+    --risk-blue-bg: 213 80% 12%;
+
+    --nav-bg: 220 30% 6%;
+    --nav-foreground: 220 15% 85%;
+    --nav-active: 213 80% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  .risk-badge-red {
+    @apply px-2 py-0.5 rounded text-xs font-semibold;
+    background: hsl(var(--risk-red-bg));
+    color: hsl(var(--risk-red));
+  }
+  .risk-badge-yellow {
+    @apply px-2 py-0.5 rounded text-xs font-semibold;
+    background: hsl(var(--risk-yellow-bg));
+    color: hsl(var(--risk-yellow));
+  }
+  .risk-badge-green {
+    @apply px-2 py-0.5 rounded text-xs font-semibold;
+    background: hsl(var(--risk-green-bg));
+    color: hsl(var(--risk-green));
+  }
+  .risk-badge-blue {
+    @apply px-2 py-0.5 rounded text-xs font-semibold;
+    background: hsl(var(--risk-blue-bg));
+    color: hsl(var(--risk-blue));
+  }
+  .matrix-cell {
+    @apply px-2 py-1.5 text-right text-sm tabular-nums;
+  }
+  .matrix-header {
+    @apply px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right;
+  }
+  .section-title {
+    @apply text-xl font-bold tracking-tight;
+  }
+  .card-metric {
+    @apply text-3xl font-extrabold tracking-tight;
+  }
+  .card-label {
+    @apply text-sm font-medium text-muted-foreground;
+  }
+  .row-highlight-green {
+    background: hsl(var(--risk-green-bg)) !important;
+  }
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: hsl(var(--border));
+}
