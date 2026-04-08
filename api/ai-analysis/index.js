@@ -1,11 +1,9 @@
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
-
 const AZURE_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || '';
 const DEPLOYMENT = process.env.AZURE_OPENAI_DEPLOYMENT || '';
 const API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2025-01-01-preview';
 const API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
 
-const httpTrigger: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
+module.exports = async function (context, req) {
   if (req.method !== 'POST') {
     context.res = { status: 405, body: 'Method not allowed' };
     return;
@@ -18,7 +16,6 @@ const httpTrigger: AzureFunction = async function (context: Context, req: HttpRe
 
   try {
     const { messages, temperature, max_tokens, response_format } = req.body;
-
     const url = `${AZURE_ENDPOINT}openai/deployments/${DEPLOYMENT}/chat/completions?api-version=${API_VERSION}`;
 
     const response = await fetch(url, {
@@ -42,9 +39,7 @@ const httpTrigger: AzureFunction = async function (context: Context, req: HttpRe
       headers: { 'Content-Type': 'application/json' },
       body: result,
     };
-  } catch (err: any) {
+  } catch (err) {
     context.res = { status: 500, body: `Proxy error: ${err.message}` };
   }
 };
-
-export default httpTrigger;

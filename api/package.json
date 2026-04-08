@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@azure/functions": "^3.5.0"
-  },
-  "devDependencies": {
-    "typescript": "~5.4.0"
+    "@azure/functions": "~3.5.0"
   }
 }
