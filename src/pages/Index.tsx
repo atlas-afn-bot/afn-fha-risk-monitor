@@ -158,6 +158,7 @@ export default function Index() {
       {/* Sidebar */}
       <aside className="w-56 bg-nav text-nav-foreground flex-shrink-0 sticky top-0 h-screen overflow-y-auto flex flex-col">
         <div className="p-4 border-b border-sidebar-border">
+          <p className="text-[10px] font-semibold tracking-widest text-nav-foreground/50 uppercase">American Financial Network</p>
           <h1 className="text-sm font-bold tracking-tight text-sidebar-primary">FHA Risk Monitor</h1>
           <p className="text-[10px] text-nav-foreground/60 mt-0.5">Loan-Level Analytics</p>
         </div>
@@ -255,12 +256,13 @@ export default function Index() {
               {/* Confidentiality Notice */}
               <div className="bg-risk-red-bg border border-risk-red/30 rounded-lg px-4 py-3">
                 <p className="text-[10px] leading-relaxed text-risk-red font-medium">
-                  <span className="font-bold uppercase">Confidential:</span> This dashboard contains confidential and proprietary information, including quality control findings, borrower-related nonpublic personal information, and internal risk assessments. Access is restricted to authorized committee members and personnel with a legitimate business need to know. Unauthorized access, use, disclosure, distribution, or copying is prohibited.
+                  <span className="font-bold uppercase">Confidential:</span> This dashboard contains proprietary information, quality control findings, borrower-related nonpublic personal information, and internal risk assessments of American Financial Network, Inc. Access is restricted to authorized committee members and personnel with a legitimate business need to know. Unauthorized access, use, disclosure, distribution, or copying is strictly prohibited.
                 </p>
               </div>
               {/* Upload replacement */}
               <div className="flex items-center justify-between">
                 <div>
+                  <p className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">American Financial Network, Inc.</p>
                   <h2 className="text-lg font-bold">FHA Risk Monitor</h2>
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-muted-foreground">{data.totalLoans.toLocaleString()} loans analyzed</p>
