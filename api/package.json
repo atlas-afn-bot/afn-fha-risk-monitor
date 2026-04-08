@@ -1,8 +1,0 @@
-{
-  "name": "afn-fha-risk-monitor-api",
-  "version": "1.0.0",
-  "private": true,
-  "dependencies": {
-    "@azure/functions": "~3.5.0"
-  }
-}
