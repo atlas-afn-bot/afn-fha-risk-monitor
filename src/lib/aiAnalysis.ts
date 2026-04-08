@@ -1,9 +1,7 @@
 import type { DashboardData } from './types';
 
-const AZURE_ENDPOINT = 'https://brady-wu-ai.cognitiveservices.azure.com/';
-const DEPLOYMENT = 'gpt-4-brady';
-const API_VERSION = '2025-01-01-preview';
-const API_KEY = 'REMOVED_SECRET';
+// API key is stored server-side in Azure Static Web App settings.
+// Frontend calls the /api/ai-analysis proxy — key never touches the browser.
 
 interface AIAnalysisResult {
   executiveSummary: AIBullet[];
@@ -121,13 +119,10 @@ KEY THRESHOLDS:
 export async function generateAIAnalysis(data: DashboardData): Promise<AIAnalysisResult> {
   const dataSummary = buildDataSummary(data);
 
-  const url = `${AZURE_ENDPOINT}openai/deployments/${DEPLOYMENT}/chat/completions?api-version=${API_VERSION}`;
-
-  const response = await fetch(url, {
+  const response = await fetch('/api/ai-analysis', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'api-key': API_KEY,
     },
     body: JSON.stringify({
       messages: [
