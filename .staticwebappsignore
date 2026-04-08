@@ -1,0 +1,15 @@
+node_modules
+src
+public
+*.md
+.git
+.github
+.lovable
+.env*
+tsconfig*
+vite.config.*
+postcss.config.*
+tailwind.config.*
+components.json
+package-lock.json
+eslint.config.*
