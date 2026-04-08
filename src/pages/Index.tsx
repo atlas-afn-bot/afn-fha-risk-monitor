@@ -15,13 +15,14 @@ import PortfolioComposition from '@/components/PortfolioComposition';
 import DPAProviderTable from '@/components/DPAProviderTable';
 import ChannelAnalysis from '@/components/ChannelAnalysis';
 import FICODistribution from '@/components/FICODistribution';
+import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import ActionItems, { STAFF_ITEMS } from '@/components/ActionItems';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
   LayoutDashboard, TrendingUp, AlertTriangle, Shield, PieChart,
-  Users, GitCompare, BarChart3, MapPin, Upload, Moon, Sun, Database, FileDown
+  Users, GitCompare, BarChart3, MapPin, Upload, Moon, Sun, Database, FileDown, Activity
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -32,6 +33,7 @@ const NAV_ITEMS = [
   { id: 'portfolio', label: 'Portfolio', icon: PieChart },
   { id: 'dpa', label: 'DPA Providers', icon: Users },
   { id: 'channel', label: 'Channel', icon: GitCompare },
+  { id: 'riskfactors', label: 'Risk Factors', icon: Activity },
   { id: 'fico', label: 'FICO', icon: BarChart3 },
   { id: 'hud', label: 'HUD Offices', icon: MapPin },
 ];
@@ -335,6 +337,10 @@ export default function Index() {
 
               <div id="section-channel">
                 <ChannelAnalysis retail={data.retailSummary} wholesale={data.wsSummary} />
+              </div>
+
+              <div id="section-riskfactors">
+                <RiskFactorCharts trends={data.trendAnalysis} overallDQRate={data.overallDQRate} />
               </div>
 
               <div id="section-fico">

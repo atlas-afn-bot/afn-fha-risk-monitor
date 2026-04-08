@@ -160,7 +160,16 @@ export default function ExecutiveSummary({ data }: Props) {
           </div>
 
           {/* ── Section 3: Risk Factor Trends (AI or fallback) ── */}
-          <div>
+          <div
+            className="cursor-pointer rounded-lg transition-colors hover:bg-muted/40 -mx-2 px-2 py-1 group"
+            onClick={(e) => {
+              // Don't navigate if clicking the AI buttons
+              if ((e.target as HTMLElement).closest('button')) return;
+              const el = document.getElementById('section-riskfactors');
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            title="Click to jump to Risk Factor charts"
+          >
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-primary" />
@@ -168,6 +177,7 @@ export default function ExecutiveSummary({ data }: Props) {
                   Portfolio Risk Factors
                 </h3>
                 {aiBullets && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">AI</span>}
+                <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">↓ Jump to charts</span>
               </div>
               <div className="flex items-center gap-2">
                 {aiError && <span className="text-[10px] text-risk-red">AI unavailable</span>}
