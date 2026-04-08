@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ClipboardList, ChevronDown, ChevronUp, Plus, X, Check, Sparkles, RefreshCw, Loader2 } from 'lucide-react';
+import { ClipboardList, ChevronDown, ChevronUp, Plus, X, Check, Sparkles, RefreshCw, Loader2, ArrowUp } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
 import { generateAIAnalysis, type AIActionItem } from '@/lib/aiAnalysis';
 import {
@@ -132,6 +132,28 @@ export default function ActionItems({ data, onItemsChanged }: Props) {
   };
 
   // ── AI item actions ──
+  const handlePromoteAI = async (idx: number) => {
+    const aiItem = aiItems[idx];
+    if (!aiItem) return;
+    // Add to manual items
+    const newManualItem = await addManualItem(aiItem.text);
+    setManualItems(prev => [...prev, newManualItem]);
+    // Dismiss from AI (so it won't regenerate)
+    await dismissAIItem(aiItem.text);
+    const hashes = await getDismissedHashes();
+    setDismissedHashes(hashes);
+    // Remove from current AI list
+    setAiItems(prev => prev.filter((_, i) => i !== idx));
+    setAiChecked(prev => {
+      const next = new Set<number>();
+      prev.forEach(i => {
+        if (i < idx) next.add(i);
+        else if (i > idx) next.add(i - 1);
+      });
+      return next;
+    });
+  };
+
   const handleDismissAI = async (idx: number) => {
     const item = aiItems[idx];
     if (!item) return;
@@ -280,14 +302,24 @@ export default function ActionItems({ data, onItemsChanged }: Props) {
                         </div>
                       )}
                     </div>
-                    <button
-                      onClick={() => handleDismissAI(idx)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-risk-red flex-shrink-0 mt-0.5"
-                      aria-label="Dismiss (won't regenerate)"
-                      title="Dismiss — this item won't come back on regenerate"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 flex-shrink-0 mt-0.5">
+                      <button
+                        onClick={() => handlePromoteAI(idx)}
+                        className="text-muted-foreground hover:text-primary"
+                        aria-label="Promote to action items"
+                        title="Add to official action items list"
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDismissAI(idx)}
+                        className="text-muted-foreground hover:text-risk-red"
+                        aria-label="Dismiss (won't regenerate)"
+                        title="Dismiss — this item won't come back on regenerate"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
