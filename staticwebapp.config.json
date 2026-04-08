@@ -21,7 +21,9 @@
     },
     {
       "route": "/*",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": [
+        "authenticated"
+      ]
     }
   ],
   "responseOverrides": {
@@ -32,11 +34,19 @@
   },
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/assets/*", "/*.ico", "/*.png", "/*.svg"]
+    "exclude": [
+      "/assets/*",
+      "/*.ico",
+      "/*.png",
+      "/*.svg"
+    ]
   },
   "globalHeaders": {
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin"
+  },
+  "platform": {
+    "apiRuntime": "node:20"
   }
 }
