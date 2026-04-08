@@ -18,7 +18,7 @@ import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
-import ActionItems, { STAFF_ITEMS } from '@/components/ActionItems';
+import ActionItems from '@/components/ActionItems';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
   LayoutDashboard, TrendingUp, AlertTriangle, Shield, PieChart,
@@ -47,7 +47,7 @@ export default function Index() {
   const [hudData, setHudData] = useState<HUDOfficeCR[] | null>(null);
   const [encompassFileName, setEncompassFileName] = useState<string | null>(null);
   const [hudFileName, setHudFileName] = useState<string | null>(null);
-  const [allActionItems, setAllActionItems] = useState<string[]>([...STAFF_ITEMS]);
+  const [allActionItems, setAllActionItems] = useState<string[]>([]);
   const [performancePeriod, setPerformancePeriod] = useState<string>('');
   const [hudHistory, setHudHistory] = useState<HUDMonthlySnapshot[]>([]);
 

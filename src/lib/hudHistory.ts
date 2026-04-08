@@ -3,8 +3,8 @@
  * Each HUD file upload stores a monthly snapshot that builds the trend chart.
  */
 
-const DB_NAME = 'risk-radar';
-const DB_VERSION = 1;
+import { openDB } from './db';
+
 const STORE_NAME = 'hud-history';
 
 export interface HUDMonthlySnapshot {
@@ -30,19 +30,7 @@ export interface HUDMonthlySnapshot {
   storedAt: string;
 }
 
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'monthKey' });
-      }
-    };
-  });
-}
+// openDB imported from shared db.ts
 
 export async function saveHUDSnapshot(snapshot: HUDMonthlySnapshot): Promise<void> {
   const db = await openDB();
