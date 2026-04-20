@@ -3,19 +3,17 @@ import type { DashboardData } from '@/lib/types';
 
 interface Props { data: DashboardData }
 
-const COLORS = ['hsl(213, 80%, 50%)', 'hsl(354, 70%, 54%)', 'hsl(142, 60%, 40%)'];
+const COLORS = ['hsl(213, 80%, 50%)', 'hsl(354, 70%, 54%)'];
 
 export default function PortfolioComposition({ data }: Props) {
   const { programComposition: pc, totalLoans } = data;
   const pieData = [
     { name: 'Standard FHA', value: pc.standard, pct: ((pc.standard / totalLoans) * 100).toFixed(1) },
     { name: 'DPA Third-Party', value: pc.dpa, pct: ((pc.dpa / totalLoans) * 100).toFixed(1) },
-    { name: 'FUEL In-House', value: pc.fuel, pct: ((pc.fuel / totalLoans) * 100).toFixed(1) },
   ];
 
   const barData = [
     { name: 'Standard FHA', rate: pc.standardDQ, fill: COLORS[0] },
-    { name: 'FUEL', rate: pc.fuelDQ, fill: COLORS[2] },
     { name: 'DPA', rate: pc.dpaDQ, fill: COLORS[1] },
   ];
 

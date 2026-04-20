@@ -114,7 +114,11 @@ export function parseExcelFile(buffer: ArrayBuffer): ParsedLoan[] {
 
     const prog = raw.LoanProgram.toUpperCase();
     const isDPA = prog.includes('DPA');
-    const isFUEL = prog.includes('FUEL');
+    // NOTE: "FUEL" is not a distinct loan program — it is the Standard FHA
+    // program run through the Wholesale channel. We retain backward-compatible
+    // parsing (Excel files may still contain "FUEL" in the loan-program text)
+    // but classify those loans as Standard. The Retail/Wholesale Channel
+    // field is the actual discriminator.
     const isDelinquent = raw.DQ.trim().toLowerCase() === 'yes';
     const channelLower = raw.Channel.toLowerCase();
     const isBoost = isDPA && raw.DPAName.toLowerCase().includes('boost');
@@ -138,10 +142,9 @@ export function parseExcelFile(buffer: ArrayBuffer): ParsedLoan[] {
     return {
       ...raw,
       isDelinquent,
-      programType: isDPA ? 'DPA' : isFUEL ? 'FUEL' : 'Standard',
+      programType: isDPA ? 'DPA' : 'Standard',
       channelType: channelLower.includes('retail') ? 'Retail' : channelLower.includes('wholesale') ? 'Wholesale' : 'Unknown',
       isDPA,
-      isFUEL,
       isBoost,
       failsEnhancedGuidelines,
     };

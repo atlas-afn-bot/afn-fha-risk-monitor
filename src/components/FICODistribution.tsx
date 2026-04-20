@@ -18,7 +18,6 @@ export default function FICODistribution({ buckets }: Props) {
             <Tooltip formatter={(v: number) => `${v.toFixed(2)}%`} />
             <Legend />
             <Bar dataKey="standardDQ" name="Standard FHA" fill="hsl(213, 80%, 50%)" />
-            <Bar dataKey="fuelDQ" name="FUEL" fill="hsl(142, 60%, 40%)" />
             <Bar dataKey="dpaDQ" name="DPA" fill="hsl(354, 70%, 54%)" />
           </BarChart>
         </ResponsiveContainer>

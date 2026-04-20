@@ -23,7 +23,7 @@ export interface LoanRecord {
   GiftGrantGroup: string;
 }
 
-export type ProgramType = 'DPA' | 'FUEL' | 'Standard';
+export type ProgramType = 'DPA' | 'Standard';
 export type ChannelType = 'Retail' | 'Wholesale' | 'Unknown';
 
 export interface ParsedLoan extends LoanRecord {
@@ -31,7 +31,6 @@ export interface ParsedLoan extends LoanRecord {
   programType: ProgramType;
   channelType: ChannelType;
   isDPA: boolean;
-  isFUEL: boolean;
   isBoost: boolean;
   /** Would this loan have been filtered out by Enhanced Guidelines? */
   failsEnhancedGuidelines: boolean;
@@ -83,7 +82,6 @@ export interface ChannelSummary {
   dpaDQRate: number;
   nonDPADQRate: number;
   standardDQRate: number;
-  fuelDQRate: number;
 }
 
 export interface FICOBucket {
@@ -91,10 +89,8 @@ export interface FICOBucket {
   min: number;
   max: number;
   standardDQ: number;
-  fuelDQ: number;
   dpaDQ: number;
   standardTotal: number;
-  fuelTotal: number;
   dpaTotal: number;
 }
 
@@ -125,7 +121,7 @@ export interface DashboardData {
   retailSummary: ChannelSummary;
   wsSummary: ChannelSummary;
   ficoBuckets: FICOBucket[];
-  programComposition: { standard: number; dpa: number; fuel: number; standardDQ: number; dpaDQ: number; fuelDQ: number };
+  programComposition: { standard: number; dpa: number; standardDQ: number; dpaDQ: number };
   hasHUDData: boolean;
   trendAnalysis: TrendAnalysis;
 }

@@ -70,18 +70,27 @@ export function generateFakeData(): ParsedLoan[] {
     const dpaConc = isWholesale ? office.dpaWS : office.dpaRetail;
     const roll = Math.random();
 
-    let programType: 'DPA' | 'FUEL' | 'Standard';
+    let programType: 'DPA' | 'Standard';
     let isDPA = false;
-    let isFUEL = false;
+    // NOTE: FUEL used to be a separate program category. It's now recognized
+    // as Standard FHA run through the Wholesale channel. The fake-data
+    // generator still emits some "FF30 FUEL" loan-program strings so that
+    // parser backward-compatibility stays exercised, but those loans are
+    // classified as Standard and the Channel field is the discriminator.
+    let isLegacyFuel = false;
     let loanProgram: string;
 
     if (roll < dpaConc) {
       isDPA = true;
       programType = 'DPA';
       loanProgram = Math.random() < 0.07 ? 'FF30 DPA MF' : 'FF30 DPA';
-    } else if (roll < dpaConc + 0.23) {
-      isFUEL = true;
-      programType = 'FUEL';
+    } else if (isWholesale && Math.random() < 0.45) {
+      // Wholesale-channel Standard FHA — this is the population that used
+      // to be labeled "FUEL" in source data. We still emit "FF30 FUEL" loan
+      // program strings here so the parser's backward-compat path is
+      // exercised; parseExcel classifies them as Standard.
+      isLegacyFuel = true;
+      programType = 'Standard';
       loanProgram = 'FF30 FUEL';
     } else {
       programType = 'Standard';
@@ -92,7 +101,7 @@ export function generateFakeData(): ParsedLoan[] {
     const fico = Math.floor(Math.random() * (bucket.max - bucket.min + 1)) + bucket.min;
 
     let baseDQ = 0.031;
-    if (isFUEL) baseDQ = 0.045;
+    if (isLegacyFuel) baseDQ = 0.045;
     if (isDPA) baseDQ = 0.089;
     const ficoAdj = Math.max(0, (680 - fico) / 1000);
     const isDelinquent = Math.random() < (baseDQ + ficoAdj);
@@ -154,7 +163,6 @@ export function generateFakeData(): ParsedLoan[] {
       programType,
       channelType: isWholesale ? 'Wholesale' : 'Retail',
       isDPA,
-      isFUEL,
       isBoost,
       failsEnhancedGuidelines,
     });

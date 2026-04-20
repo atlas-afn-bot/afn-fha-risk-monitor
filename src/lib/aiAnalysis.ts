@@ -48,7 +48,7 @@ function buildDataSummary(data: DashboardData): string {
     .map(p => `  - ${p.name}: ${p.totalLoans} loans, ${p.delinquent} DLQ (${p.dqRate.toFixed(1)}%), ${p.pctOfDPAVolume.toFixed(1)}% of DPA volume`)
     .join('\n');
 
-  const { standardDQ, dpaDQ, fuelDQ } = data.programComposition;
+  const { standardDQ, dpaDQ } = data.programComposition;
   const multiplier = standardDQ > 0 ? (dpaDQ / standardDQ).toFixed(1) : 'N/A';
 
   const t = data.trendAnalysis;
@@ -59,7 +59,8 @@ PORTFOLIO OVERVIEW:
 - Total Loans: ${data.totalLoans.toLocaleString()}
 - Overall DQ Rate: ${data.overallDQRate.toFixed(2)}%
 - DPA Portfolio Concentration: ${data.dpaPortfolioConc.toFixed(1)}%
-- Program DQ Rates: Standard FHA ${standardDQ.toFixed(2)}%, FUEL ${fuelDQ.toFixed(2)}%, DPA ${dpaDQ.toFixed(2)}% (${multiplier}x standard rate)
+- Program DQ Rates: Standard FHA ${standardDQ.toFixed(2)}%, DPA ${dpaDQ.toFixed(2)}% (${multiplier}x standard rate)
+- NOTE: "FUEL" is not a distinct program — it was Standard FHA run through the Wholesale channel. Use the Retail vs Wholesale channel breakdown below to see what was previously labeled "FUEL" performance (wholesale-channel Standard FHA).
 
 CHANNEL COMPARISON:
 - Retail: ${data.retailSummary.totalLoans} loans, DPA Conc ${data.retailSummary.dpaConc.toFixed(1)}%, DQ Rate ${data.retailSummary.overallDQRate.toFixed(2)}%, DPA DQ ${data.retailSummary.dpaDQRate.toFixed(2)}%
@@ -76,7 +77,7 @@ TOP DPA PROVIDERS BY DELINQUENCY:
 ${topProviders}
 
 FICO ANALYSIS:
-${data.ficoBuckets.map(b => `  ${b.label}: Standard ${b.standardDQ.toFixed(1)}%, FUEL ${b.fuelDQ.toFixed(1)}%, DPA ${b.dpaDQ.toFixed(1)}% (${b.dpaTotal} DPA loans)`).join('\n')}
+${data.ficoBuckets.map(b => `  ${b.label}: Standard ${b.standardDQ.toFixed(1)}%, DPA ${b.dpaDQ.toFixed(1)}% (${b.dpaTotal} DPA loans)`).join('\n')}
 
 UNDERWRITING & RISK FACTOR TRENDS:
 

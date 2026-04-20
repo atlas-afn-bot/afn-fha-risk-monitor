@@ -191,7 +191,6 @@ function computeChannelSummary(loans: ParsedLoan[], channel: 'Retail' | 'Wholesa
   const dpa = ch.filter(l => l.isDPA);
   const nonDPA = ch.filter(l => !l.isDPA);
   const standard = ch.filter(l => l.programType === 'Standard');
-  const fuel = ch.filter(l => l.programType === 'FUEL');
   const dlq = ch.filter(l => l.isDelinquent).length;
 
   return {
@@ -201,7 +200,6 @@ function computeChannelSummary(loans: ParsedLoan[], channel: 'Retail' | 'Wholesa
     dpaDQRate: dpa.length > 0 ? (dpa.filter(l => l.isDelinquent).length / dpa.length) * 100 : 0,
     nonDPADQRate: nonDPA.length > 0 ? (nonDPA.filter(l => l.isDelinquent).length / nonDPA.length) * 100 : 0,
     standardDQRate: standard.length > 0 ? (standard.filter(l => l.isDelinquent).length / standard.length) * 100 : 0,
-    fuelDQRate: fuel.length > 0 ? (fuel.filter(l => l.isDelinquent).length / fuel.length) * 100 : 0,
   };
 }
 
@@ -219,15 +217,12 @@ function computeFICO(loans: ParsedLoan[]): FICOBucket[] {
   return buckets.map(b => {
     const inBucket = loans.filter(l => l.FICO >= b.min && l.FICO <= b.max);
     const standard = inBucket.filter(l => l.programType === 'Standard');
-    const fuel = inBucket.filter(l => l.programType === 'FUEL');
     const dpa = inBucket.filter(l => l.programType === 'DPA');
     return {
       ...b,
       standardDQ: standard.length > 0 ? (standard.filter(l => l.isDelinquent).length / standard.length) * 100 : 0,
-      fuelDQ: fuel.length > 0 ? (fuel.filter(l => l.isDelinquent).length / fuel.length) * 100 : 0,
       dpaDQ: dpa.length > 0 ? (dpa.filter(l => l.isDelinquent).length / dpa.length) * 100 : 0,
       standardTotal: standard.length,
-      fuelTotal: fuel.length,
       dpaTotal: dpa.length,
     };
   });
@@ -236,12 +231,10 @@ function computeFICO(loans: ParsedLoan[]): FICOBucket[] {
 function computeProgramComposition(loans: ParsedLoan[]) {
   const standard = loans.filter(l => l.programType === 'Standard');
   const dpa = loans.filter(l => l.programType === 'DPA');
-  const fuel = loans.filter(l => l.programType === 'FUEL');
   return {
-    standard: standard.length, dpa: dpa.length, fuel: fuel.length,
+    standard: standard.length, dpa: dpa.length,
     standardDQ: standard.length > 0 ? (standard.filter(l => l.isDelinquent).length / standard.length) * 100 : 0,
     dpaDQ: dpa.length > 0 ? (dpa.filter(l => l.isDelinquent).length / dpa.length) * 100 : 0,
-    fuelDQ: fuel.length > 0 ? (fuel.filter(l => l.isDelinquent).length / fuel.length) * 100 : 0,
   };
 }
 
