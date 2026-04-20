@@ -263,7 +263,7 @@ export default function Index() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">American Financial Network, Inc.</p>
-                  <h2 className="text-lg font-bold">FHA Risk Monitor</h2>
+                  <h2 className="text-lg font-bold">FHA Risk Monitor · HUD Compare Ratio Analytics</h2>
                   <div className="flex items-center gap-2">
                     <p className="text-xs text-muted-foreground">{data.totalLoans.toLocaleString()} loans analyzed</p>
                     {performancePeriod && (
