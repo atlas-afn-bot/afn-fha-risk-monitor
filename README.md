@@ -22,7 +22,7 @@ Automatically identifies delinquent Boost DPA loans that would not have been ori
 
 ### Charts & Analysis
 - **26-Month Compare Ratio Trend** — Historical Overall/Retail/Wholesale CRs with persistence (IndexedDB)
-- **Portfolio Composition** — Standard FHA / DPA / FUEL breakdown with DQ rate comparison
+- **Portfolio Composition** — Standard FHA / DPA breakdown with DQ rate comparison (Retail vs Wholesale shown in Channel Analysis)
 - **DPA Provider Performance** — Tiered risk view (High Risk / Watch / Performing) with search and inline DQ bars
 - **Channel Analysis** — Retail vs Wholesale side-by-side risk comparison
 - **FICO Distribution** — DQ rates by FICO band across program types
@@ -49,7 +49,7 @@ Automatically identifies delinquent Boost DPA loans that would not have been ori
 | A | DQ | Delinquency flag |
 | G | HUD Office | Office grouping |
 | J | Loan Info Channel | Retail vs Wholesale |
-| R | Loan Program | DPA/FUEL/Standard classification |
+| R | Loan Program | DPA/Standard classification (legacy "FUEL" values are classified as Standard; use Channel column for Retail/Wholesale split) |
 | V | Subject Property # Units | Enhanced Guidelines (3-4 unit filter) |
 | AF | Gift Fund Amount | Enhanced Guidelines (gift fund restriction) |
 | AJ | Payment Shock | Enhanced Guidelines (shock limit) |

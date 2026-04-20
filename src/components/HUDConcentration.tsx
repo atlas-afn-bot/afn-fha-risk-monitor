@@ -13,9 +13,8 @@ export default function HUDConcentration({ data }: Props) {
       .sort((a, b) => b.totalDPAConc - a.totalDPAConc)
       .map(o => ({
         name: o.name,
-        Standard: o.totalLoans - data.loans.filter(l => l.HUDOffice === o.name && l.isDPA).length - data.loans.filter(l => l.HUDOffice === o.name && l.isFUEL).length,
+        Standard: o.totalLoans - data.loans.filter(l => l.HUDOffice === o.name && l.isDPA).length,
         DPA: data.loans.filter(l => l.HUDOffice === o.name && l.isDPA).length,
-        FUEL: data.loans.filter(l => l.HUDOffice === o.name && l.isFUEL).length,
         dpaConc: o.totalDPAConc,
       }));
   }, [data, minLoans]);
@@ -47,7 +46,6 @@ export default function HUDConcentration({ data }: Props) {
             <Legend />
             <Bar dataKey="Standard" stackId="a" fill="hsl(213, 80%, 50%)" />
             <Bar dataKey="DPA" stackId="a" fill="hsl(354, 70%, 54%)" />
-            <Bar dataKey="FUEL" stackId="a" fill="hsl(142, 60%, 40%)" />
           </BarChart>
         </ResponsiveContainer>
       </div>

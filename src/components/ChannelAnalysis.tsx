@@ -15,7 +15,6 @@ export default function ChannelAnalysis({ retail, wholesale }: Props) {
     { label: 'DPA DQ Rate', r: `${retail.dpaDQRate.toFixed(2)}%`, w: `${wholesale.dpaDQRate.toFixed(2)}%` },
     { label: 'Non-DPA DQ Rate', r: `${retail.nonDPADQRate.toFixed(2)}%`, w: `${wholesale.nonDPADQRate.toFixed(2)}%` },
     { label: 'Standard FHA DQ Rate', r: `${retail.standardDQRate.toFixed(2)}%`, w: `${wholesale.standardDQRate.toFixed(2)}%` },
-    { label: 'FUEL DQ Rate', r: `${retail.fuelDQRate.toFixed(2)}%`, w: `${wholesale.fuelDQRate.toFixed(2)}%` },
   ];
 
   return (

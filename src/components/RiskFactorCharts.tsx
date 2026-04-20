@@ -17,7 +17,6 @@ const COLORS = {
   green: 'hsl(142, 60%, 40%)',   // green
   standard: 'hsl(213, 80%, 50%)',
   dpa: 'hsl(354, 70%, 54%)',
-  fuel: 'hsl(142, 60%, 40%)',
 };
 
 function barColor(dqRate: number, avg: number): string {
