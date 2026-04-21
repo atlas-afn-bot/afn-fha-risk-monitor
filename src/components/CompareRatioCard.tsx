@@ -1,3 +1,4 @@
+import { Gauge } from 'lucide-react';
 import type { Snapshot } from '@/types/snapshot';
 
 interface Props {
@@ -15,8 +16,8 @@ function formatRatio(val: number | null | undefined): string {
 
 /**
  * HUD Compare Ratio KPI tile. Sits in the top KPI row alongside the other
- * summary tiles (Total Loans, DQ Rate, etc.) with identical outer styling.
- * Body is a compact tabular list of Total / Retail / Wholesale ratios.
+ * summary tiles (Total Loans, DQ Rate, etc.) with identical outer styling:
+ * colored icon box on the left, hero Total number, Retail/Wholesale subtext.
  *
  * Snapshot exposes the wholesale scope as `sponsor`; we relabel to
  * "Wholesale" for display.
@@ -27,22 +28,24 @@ export default function CompareRatioCard({ snapshot }: Props) {
   const retail = rows.find(r => r.scope === 'retail');
   const sponsor = rows.find(r => r.scope === 'sponsor');
 
-  const items = [
-    { label: 'Total', value: formatRatio(total?.compare_ratio) },
-    { label: 'Retail', value: formatRatio(retail?.compare_ratio) },
-    { label: 'Wholesale', value: formatRatio(sponsor?.compare_ratio) },
-  ];
+  const totalRatio = formatRatio(total?.compare_ratio);
+  const retailRatio = formatRatio(retail?.compare_ratio);
+  const wholesaleRatio = formatRatio(sponsor?.compare_ratio);
 
   return (
-    <div className="bg-card rounded-lg border border-border p-5">
-      <p className="card-label">HUD Compare Ratio</p>
-      <div className="mt-2 space-y-1">
-        {items.map(item => (
-          <div key={item.label} className="flex items-baseline justify-between gap-3">
-            <span className="text-xs text-muted-foreground">{item.label}</span>
-            <span className="text-base font-semibold tabular-nums">{item.value}</span>
+    <div className="bg-card rounded-lg p-5 shadow-sm border border-border hover-lift">
+      <div className="flex items-start gap-4">
+        <div className="p-2.5 rounded-lg bg-risk-blue-bg">
+          <Gauge className="h-5 w-5 text-risk-blue" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-muted-foreground">HUD Compare Ratio</p>
+          <p className="text-2xl font-bold text-foreground mt-1">{totalRatio}</p>
+          <div className="flex gap-3 mt-2 text-xs text-muted-foreground">
+            <span>Retail <span className="font-medium text-foreground">{retailRatio}</span></span>
+            <span>Wholesale <span className="font-medium text-foreground">{wholesaleRatio}</span></span>
           </div>
-        ))}
+        </div>
       </div>
     </div>
   );
