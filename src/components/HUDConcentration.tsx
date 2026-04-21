@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import type { DashboardData } from '@/lib/types';
+import SliderWithInput from './SliderWithInput';
 
 interface Props { data: DashboardData }
 
@@ -23,18 +24,13 @@ export default function HUDConcentration({ data }: Props) {
     <div className="bg-card rounded-lg border border-border p-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="section-title">DPA Concentration by HUD Office</h2>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-muted-foreground">Min loans:</label>
-          <input
-            type="range"
-            min={10}
-            max={200}
-            value={minLoans}
-            onChange={e => setMinLoans(Number(e.target.value))}
-            className="w-24"
-          />
-          <span className="text-xs font-medium w-8">{minLoans}</span>
-        </div>
+        <SliderWithInput
+          label="Min loans:"
+          min={10}
+          max={200}
+          value={minLoans}
+          onChange={setMinLoans}
+        />
       </div>
       <div style={{ height: Math.max(400, chartData.length * 28) }}>
         <ResponsiveContainer>
