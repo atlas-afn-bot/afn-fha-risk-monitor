@@ -4,8 +4,20 @@ export interface LoanRecord {
   HUDOfficeCR: number;
   Channel: string;
   LoanProgram: string;
+  /**
+   * Raw DPA Name from Neighborhood Watch export.
+   *
+   * NOTE: Kept for raw storage / debugging only. DPA Name is too granular to
+   * drive analytics (e.g. "Boost FHA Loan Program", "Boost 3.5% Repayable DPA
+   * Program", and "AFN Boost 3.5% Repayable" all describe the same program).
+   * All aggregations and displays must key on {@link DPAProgram} and
+   * {@link DPAInvestor} instead.
+   */
   DPAName: string;
+  /** High-level DPA program bucket ("Boost", "Arrive/Aurora", "Non-DPA"). */
   DPAProgram: string;
+  /** DPA investor / funding source ("AFN", "Orion Lending", "United Security Financial Corp", …). */
+  DPAInvestor: string;
   FICO: number;
   Units: string;
   AUSType: string;
@@ -65,14 +77,42 @@ export interface OfficeSummary {
   isImproved: boolean;
 }
 
-export interface DPAProviderSummary {
-  name: string;
+/**
+ * Performance summary for one DPA Investor within a given DPA Program.
+ *
+ * Investors are the secondary grouping dimension — e.g. within the "Boost"
+ * program we roll up performance by "AFN", "Orion Lending", etc.
+ */
+export interface DPAInvestorSummary {
+  investor: string;
+  program: string;
   totalLoans: number;
   delinquent: number;
   dqRate: number;
+  /** Share of parent program's volume (0-100). */
+  pctOfProgramVolume: number;
+  /** Share of total DPA volume (0-100). */
   pctOfDPAVolume: number;
   retailLoans: number;
   wsLoans: number;
+}
+
+/**
+ * Performance summary rolled up to a DPA Program (Boost, Arrive/Aurora, …).
+ *
+ * Each program carries its per-investor breakdown under {@link investors} for
+ * drill-down; callers that only need the top-level view can ignore it.
+ */
+export interface DPAProgramSummary {
+  program: string;
+  totalLoans: number;
+  delinquent: number;
+  dqRate: number;
+  /** Share of total DPA volume (0-100). */
+  pctOfDPAVolume: number;
+  retailLoans: number;
+  wsLoans: number;
+  investors: DPAInvestorSummary[];
 }
 
 export interface ChannelSummary {
@@ -117,7 +157,10 @@ export interface DashboardData {
   terminationRiskCount: number;
   dpaPortfolioConc: number;
   offices: OfficeSummary[];
-  dpaProviders: DPAProviderSummary[];
+  /** Primary DPA analytics — grouped by DPA Program with investor drill-down. */
+  dpaPrograms: DPAProgramSummary[];
+  /** Flat Program × Investor matrix for export / detail views. */
+  dpaMatrix: DPAInvestorSummary[];
   retailSummary: ChannelSummary;
   wsSummary: ChannelSummary;
   ficoBuckets: FICOBucket[];
@@ -125,6 +168,7 @@ export interface DashboardData {
   hasHUDData: boolean;
   trendAnalysis: TrendAnalysis;
 }
+
 
 export interface TrendDimension {
   label: string;

@@ -41,16 +41,25 @@ export function generateFakeData(): ParsedLoan[] {
     { name: 'Louisville', weight: 65, cr: 180, dpaRetail: 0.10, dpaWS: 0.20 },
   ];
 
-  const dpaProviders = [
-    { name: 'Boost FHA Loan Program', weight: 69, dqRate: 0.104 },
-    { name: 'Aurora FHA Loan Program', weight: 8, dqRate: 0.091 },
-    { name: 'Elevate FHA Loan Program', weight: 6, dqRate: 0.016 },
-    { name: 'AFN Boost 3.5% Repayable', weight: 3, dqRate: 0.054 },
-    { name: 'AFN Boost FHA', weight: 3, dqRate: 0.057 },
-    { name: 'FL Housing Assist Program', weight: 2, dqRate: 0.048 },
-    { name: 'CalHFA DPA Program', weight: 1, dqRate: 0.000 },
-    { name: 'MSHDA DPA Program', weight: 1, dqRate: 0.043 },
-    { name: 'Other DPA Programs', weight: 7, dqRate: 0.065 },
+  // DPA Program × Investor matrix for fake-data generation.
+  //
+  // Real Neighborhood Watch exports carry two relevant columns:
+  //   • DPA Program  — the high-level program bucket (Boost, Arrive/Aurora, …)
+  //   • DPA Investor — the funding investor behind that program
+  // Non-DPA loans have an empty investor.
+  const dpaProgramInvestors = [
+    // Boost — AFN is the dominant originator, Orion Lending smaller share
+    { program: 'Boost', investor: 'AFN', weight: 62, dqRate: 0.104, nameLabel: 'Boost FHA Loan Program' },
+    { program: 'Boost', investor: 'Orion Lending', weight: 16, dqRate: 0.084, nameLabel: 'Boost FHA Loan Program' },
+    // Arrive/Aurora — United Security Financial Corp is the canonical investor
+    { program: 'Arrive/Aurora', investor: 'United Security Financial Corp', weight: 10, dqRate: 0.091, nameLabel: 'Aurora FHA Loan Program' },
+    // State HFA programs, grouped under a generic "State HFA" program bucket
+    { program: 'State HFA', investor: 'CalHFA', weight: 2, dqRate: 0.000, nameLabel: 'CalHFA DPA Program' },
+    { program: 'State HFA', investor: 'MSHDA', weight: 2, dqRate: 0.043, nameLabel: 'MSHDA DPA Program' },
+    { program: 'State HFA', investor: 'FL Housing', weight: 2, dqRate: 0.048, nameLabel: 'FL Housing Assist Program' },
+    // Other third-party DPA
+    { program: 'Other DPA', investor: 'Chenoa Fund', weight: 3, dqRate: 0.065, nameLabel: 'Chenoa Fund DPA' },
+    { program: 'Other DPA', investor: 'Unassigned', weight: 3, dqRate: 0.060, nameLabel: 'Other DPA Programs' },
   ];
 
   const ficoBuckets = [
@@ -108,13 +117,15 @@ export function generateFakeData(): ParsedLoan[] {
 
     let dpaName = '';
     let dpaProg = '';
+    let dpaInvestor = '';
     if (isDPA) {
-      const provider = weightedRandom(dpaProviders, 'weight');
-      dpaName = provider.name;
-      dpaProg = provider.name + ' - Standard';
+      const pick = weightedRandom(dpaProgramInvestors, 'weight');
+      dpaProg = pick.program;
+      dpaInvestor = pick.investor;
+      dpaName = pick.nameLabel; // raw name retained for backward-compat / debugging only
     }
 
-    const isBoost = isDPA && dpaName.toLowerCase().includes('boost');
+    const isBoost = isDPA && dpaProg.toLowerCase().includes('boost');
 
     // Simulate Enhanced Guidelines fields for fake data
     const units = Math.random() < 0.03 ? '3-4' : '1';
@@ -145,6 +156,7 @@ export function generateFakeData(): ParsedLoan[] {
       LoanProgram: loanProgram,
       DPAName: dpaName,
       DPAProgram: dpaProg,
+      DPAInvestor: dpaInvestor,
       FICO: fico,
       LTVGroup: Math.random() < 0.7 ? '95.01 - 100' : '90.01 - 95',
       FTHB: Math.random() < 0.68 ? 'Y' : 'N',

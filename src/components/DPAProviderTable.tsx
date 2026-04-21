@@ -1,58 +1,18 @@
-import { useState, useMemo } from 'react';
-import { ArrowUpDown, Download, ChevronDown, ChevronUp, Search, AlertTriangle, Eye, CheckCircle } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Download, ChevronDown, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts';
-import type { DPAProviderSummary } from '@/lib/types';
+import type { DPAProgramSummary } from '@/lib/types';
 
 interface Props {
-  providers: DPAProviderSummary[];
+  programs: DPAProgramSummary[];
   overallDQRate?: number;
 }
 
-type SortKey = keyof DPAProviderSummary;
-
-interface TierConfig {
-  label: string;
-  icon: typeof AlertTriangle;
-  color: string;
-  bgColor: string;
-  borderColor: string;
-  badgeColor: string;
-  filter: (p: DPAProviderSummary) => boolean;
-  defaultOpen: boolean;
+function riskBarColor(dqRate: number): string {
+  if (dqRate > 8) return 'bg-risk-red';
+  if (dqRate >= 4) return 'bg-risk-yellow';
+  return 'bg-risk-green';
 }
-
-const TIERS: TierConfig[] = [
-  {
-    label: 'High Risk',
-    icon: AlertTriangle,
-    color: 'text-risk-red',
-    bgColor: 'bg-risk-red-bg',
-    borderColor: 'border-risk-red/20',
-    badgeColor: 'bg-risk-red/15 text-risk-red',
-    filter: p => p.dqRate > 8 && p.totalLoans >= 10,
-    defaultOpen: true,
-  },
-  {
-    label: 'Watch',
-    icon: Eye,
-    color: 'text-risk-yellow',
-    bgColor: 'bg-risk-yellow-bg',
-    borderColor: 'border-risk-yellow/20',
-    badgeColor: 'bg-risk-yellow/15 text-risk-yellow',
-    filter: p => p.dqRate >= 4 && p.dqRate <= 8 && p.totalLoans >= 10,
-    defaultOpen: true,
-  },
-  {
-    label: 'Performing',
-    icon: CheckCircle,
-    color: 'text-risk-green',
-    bgColor: 'bg-risk-green-bg',
-    borderColor: 'border-risk-green/20',
-    badgeColor: 'bg-risk-green/15 text-risk-green',
-    filter: p => p.dqRate < 4 || p.totalLoans < 10,
-    defaultOpen: false,
-  },
-];
 
 function InlineBar({ value, max, color }: { value: number; max: number; color: string }) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
@@ -66,92 +26,80 @@ function InlineBar({ value, max, color }: { value: number; max: number; color: s
   );
 }
 
-export default function DPAProviderTable({ providers, overallDQRate = 0 }: Props) {
-  const [sortKey, setSortKey] = useState<SortKey>('delinquent');
-  const [sortDesc, setSortDesc] = useState(true);
-  const [search, setSearch] = useState('');
-  const [openTiers, setOpenTiers] = useState<Set<string>>(new Set(TIERS.filter(t => t.defaultOpen).map(t => t.label)));
+/**
+ * DPA Program Performance — primary analytics grouped by DPA Program
+ * (Boost, Arrive/Aurora, …), with per-investor drill-down.
+ *
+ * Replaces the earlier per-DPA-Name view, which was too granular (multiple
+ * rows representing the same underlying program).
+ */
+export default function DPAProviderTable({ programs, overallDQRate = 0 }: Props) {
+  // Start with all programs expanded so the investor detail is visible immediately.
+  const [openPrograms, setOpenPrograms] = useState<Set<string>>(
+    () => new Set(programs.map(p => p.program)),
+  );
 
-  const maxDQRate = useMemo(() => Math.max(...providers.map(p => p.dqRate), 1), [providers]);
-  const maxLoans = useMemo(() => Math.max(...providers.map(p => p.totalLoans), 1), [providers]);
+  const maxDQRate = useMemo(
+    () => Math.max(...programs.flatMap(p => [p.dqRate, ...p.investors.map(i => i.dqRate)]), 1),
+    [programs],
+  );
 
-  const filtered = useMemo(() => {
-    let arr = providers;
-    if (search) {
-      const q = search.toLowerCase();
-      arr = arr.filter(p => p.name.toLowerCase().includes(q));
-    }
-    return [...arr].sort((a, b) => {
-      const av = a[sortKey]; const bv = b[sortKey];
-      if (typeof av === 'string') return sortDesc ? (bv as string).localeCompare(av) : (av as string).localeCompare(bv as string);
-      return sortDesc ? (bv as number) - (av as number) : (av as number) - (bv as number);
-    });
-  }, [providers, sortKey, sortDesc, search]);
-
-  const toggle = (k: SortKey) => {
-    if (sortKey === k) setSortDesc(!sortDesc);
-    else { setSortKey(k); setSortDesc(true); }
-  };
-
-  const toggleTier = (label: string) => {
-    setOpenTiers(prev => {
+  const toggleProgram = (program: string) => {
+    setOpenPrograms(prev => {
       const next = new Set(prev);
-      next.has(label) ? next.delete(label) : next.add(label);
+      if (next.has(program)) next.delete(program);
+      else next.add(program);
       return next;
     });
   };
 
-  // Chart data: top 10 by DLQ count, showing DQ rate
-  const top10 = useMemo(() =>
-    [...providers].sort((a, b) => b.delinquent - a.delinquent).slice(0, 10),
-  [providers]);
+  // Chart data: top 10 (program, investor) pairs by delinquency count
+  const topMatrixRows = useMemo(() => {
+    const rows = programs.flatMap(p =>
+      p.investors.map(i => ({
+        label: `${p.program} · ${i.investor}`,
+        program: p.program,
+        investor: i.investor,
+        totalLoans: i.totalLoans,
+        delinquent: i.delinquent,
+        dqRate: i.dqRate,
+      })),
+    );
+    return rows.sort((a, b) => b.delinquent - a.delinquent).slice(0, 10);
+  }, [programs]);
 
   // Summary stats
-  const totalDPALoans = providers.reduce((s, p) => s + p.totalLoans, 0);
-  const totalDPADLQ = providers.reduce((s, p) => s + p.delinquent, 0);
+  const totalDPALoans = programs.reduce((s, p) => s + p.totalLoans, 0);
+  const totalDPADLQ = programs.reduce((s, p) => s + p.delinquent, 0);
   const weightedDQRate = totalDPALoans > 0 ? (totalDPADLQ / totalDPALoans) * 100 : 0;
-  const highRiskCount = providers.filter(p => p.dqRate > 8 && p.totalLoans >= 10).length;
-  const topOffender = providers.reduce((max, p) => p.delinquent > (max?.delinquent ?? 0) ? p : max, providers[0]);
-
-  const SH = ({ label, sk, className = '' }: { label: string; sk: SortKey; className?: string }) => (
-    <th className={`matrix-header cursor-pointer hover:text-foreground whitespace-nowrap ${className}`} onClick={() => toggle(sk)}>
-      {label} <ArrowUpDown className="inline w-3 h-3" />
-    </th>
+  const totalInvestors = programs.reduce((s, p) => s + p.investors.length, 0);
+  const topProgram = programs.reduce<DPAProgramSummary | undefined>(
+    (max, p) => (p.delinquent > (max?.delinquent ?? 0) ? p : max),
+    undefined,
   );
 
   const exportCSV = () => {
-    const headers = ['Provider', 'Total Loans', 'Delinquent', 'DQ Rate', '% of DPA Volume', 'Retail', 'Wholesale'];
-    const rows = filtered.map(p => [p.name, p.totalLoans, p.delinquent, p.dqRate.toFixed(1) + '%', p.pctOfDPAVolume.toFixed(1) + '%', p.retailLoans, p.wsLoans].join(','));
+    const headers = ['Program', 'Investor', 'Total Loans', 'Delinquent', 'DQ Rate', '% of Program', '% of DPA Volume', 'Retail', 'Wholesale'];
+    const rows: string[] = [];
+    for (const p of programs) {
+      // Program-level total
+      rows.push([p.program, '— All —', p.totalLoans, p.delinquent, `${p.dqRate.toFixed(1)}%`, '100.0%', `${p.pctOfDPAVolume.toFixed(1)}%`, p.retailLoans, p.wsLoans].join(','));
+      for (const inv of p.investors) {
+        rows.push([p.program, inv.investor, inv.totalLoans, inv.delinquent, `${inv.dqRate.toFixed(1)}%`, `${inv.pctOfProgramVolume.toFixed(1)}%`, `${inv.pctOfDPAVolume.toFixed(1)}%`, inv.retailLoans, inv.wsLoans].join(','));
+      }
+    }
     const csv = [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'dpa_providers.csv';
+    a.download = 'dpa_programs_investors.csv';
     a.click();
   };
-
-  const renderProviderRow = (p: DPAProviderSummary) => (
-    <tr key={p.name} className="border-b border-border/50 hover:bg-muted/50">
-      <td className="px-2 py-1.5 text-xs text-left font-medium whitespace-nowrap max-w-[200px] truncate" title={p.name}>{p.name}</td>
-      <td className="matrix-cell">{p.totalLoans.toLocaleString()}</td>
-      <td className="matrix-cell font-medium">{p.delinquent}</td>
-      <td className="px-2 py-1.5">
-        <InlineBar
-          value={p.dqRate}
-          max={maxDQRate}
-          color={p.dqRate > 8 ? 'bg-risk-red' : p.dqRate >= 4 ? 'bg-risk-yellow' : 'bg-risk-green'}
-        />
-      </td>
-      <td className="matrix-cell text-muted-foreground">{p.pctOfDPAVolume.toFixed(1)}%</td>
-      <td className="matrix-cell">{p.retailLoans}</td>
-      <td className="matrix-cell">{p.wsLoans}</td>
-    </tr>
-  );
 
   return (
     <div className="bg-card rounded-lg border border-border p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="section-title">DPA Provider Performance Analysis</h2>
+        <h2 className="section-title">DPA Program &amp; Investor Performance</h2>
         <button onClick={exportCSV} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <Download className="w-3.5 h-3.5" /> Export CSV
         </button>
@@ -160,135 +108,131 @@ export default function DPAProviderTable({ providers, overallDQRate = 0 }: Props
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
         <div className="bg-muted/50 rounded-lg px-4 py-3">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Providers</p>
-          <p className="text-lg font-bold mt-0.5">{providers.length}</p>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Programs</p>
+          <p className="text-lg font-bold mt-0.5">{programs.length}</p>
+          <p className="text-[10px] text-muted-foreground">{totalInvestors} investors</p>
         </div>
         <div className="bg-muted/50 rounded-lg px-4 py-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Weighted DQ Rate</p>
           <p className="text-lg font-bold mt-0.5">{weightedDQRate.toFixed(1)}%</p>
         </div>
-        <div className="bg-risk-red-bg rounded-lg px-4 py-3">
-          <p className="text-[10px] text-risk-red uppercase tracking-wider">High Risk (&gt;8%)</p>
-          <p className="text-lg font-bold text-risk-red mt-0.5">{highRiskCount}</p>
+        <div className="bg-muted/50 rounded-lg px-4 py-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Total DPA Loans</p>
+          <p className="text-lg font-bold mt-0.5">{totalDPALoans.toLocaleString()}</p>
+          <p className="text-[10px] text-muted-foreground">{totalDPADLQ} DLQ</p>
         </div>
         <div className="bg-muted/50 rounded-lg px-4 py-3">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Top Contributor</p>
-          <p className="text-xs font-bold mt-0.5 truncate" title={topOffender?.name}>{topOffender?.name?.split(' ').slice(0, 2).join(' ')}</p>
-          <p className="text-[10px] text-muted-foreground">{topOffender?.delinquent} DLQ ({topOffender?.pctOfDPAVolume.toFixed(0)}% vol)</p>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Top Program</p>
+          <p className="text-xs font-bold mt-0.5 truncate" title={topProgram?.program}>{topProgram?.program ?? '—'}</p>
+          <p className="text-[10px] text-muted-foreground">{topProgram?.delinquent ?? 0} DLQ ({(topProgram?.pctOfDPAVolume ?? 0).toFixed(0)}% vol)</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Tiered table */}
-        <div>
-          {/* Search */}
-          <div className="relative mb-3">
-            <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-muted-foreground" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search providers..."
-              className="w-full text-xs bg-muted/50 border border-border rounded-md pl-8 pr-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-            />
-          </div>
-
-          {search ? (
-            /* Flat filtered table when searching */
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <SH label="Provider" sk="name" className="text-left" />
-                    <SH label="Loans" sk="totalLoans" />
-                    <SH label="DLQ" sk="delinquent" />
-                    <th className="matrix-header cursor-pointer hover:text-foreground whitespace-nowrap" onClick={() => toggle('dqRate')}>
-                      DQ Rate <ArrowUpDown className="inline w-3 h-3" />
-                    </th>
-                    <SH label="% Vol" sk="pctOfDPAVolume" />
-                    <SH label="R" sk="retailLoans" />
-                    <SH label="WS" sk="wsLoans" />
-                  </tr>
-                </thead>
-                <tbody>{filtered.map(renderProviderRow)}</tbody>
-              </table>
-            </div>
-          ) : (
-            /* Tiered view */
-            <div className="space-y-2">
-              {TIERS.map(tier => {
-                const tierProviders = filtered.filter(tier.filter);
-                if (tierProviders.length === 0) return null;
-                const isOpen = openTiers.has(tier.label);
-                const Icon = tier.icon;
-
-                return (
-                  <div key={tier.label} className={`rounded-lg border ${tier.borderColor}`}>
-                    <button
-                      onClick={() => toggleTier(tier.label)}
-                      className={`w-full flex items-center justify-between px-3 py-2 text-left rounded-t-lg ${tier.bgColor}`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon className={`w-3.5 h-3.5 ${tier.color}`} />
-                        <span className={`text-xs font-semibold ${tier.color}`}>{tier.label}</span>
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${tier.badgeColor}`}>
-                          {tierProviders.length}
-                        </span>
-                      </div>
-                      {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
-                    </button>
-                    {isOpen && (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-border">
-                              <th className="matrix-header text-left">Provider</th>
-                              <th className="matrix-header">Loans</th>
-                              <th className="matrix-header">DLQ</th>
-                              <th className="matrix-header" style={{ minWidth: 130 }}>DQ Rate</th>
-                              <th className="matrix-header">% Vol</th>
-                              <th className="matrix-header">R</th>
-                              <th className="matrix-header">WS</th>
-                            </tr>
-                          </thead>
-                          <tbody>{tierProviders.map(renderProviderRow)}</tbody>
-                        </table>
-                      </div>
-                    )}
+        {/* Left: Program × Investor hierarchy */}
+        <div className="space-y-2">
+          {programs.map(p => {
+            const isOpen = openPrograms.has(p.program);
+            const barColor = riskBarColor(p.dqRate);
+            return (
+              <div key={p.program} className="rounded-lg border border-border">
+                <button
+                  onClick={() => toggleProgram(p.program)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-left bg-muted/40 rounded-t-lg hover:bg-muted/60"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
+                    <span className="text-sm font-semibold truncate">{p.program}</span>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground flex-shrink-0">
+                      {p.investors.length} investor{p.investors.length === 1 ? '' : 's'}
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground flex-shrink-0">
+                    <span>{p.totalLoans.toLocaleString()} loans</span>
+                    <span>{p.delinquent} DLQ</span>
+                    <span className={`font-semibold ${p.dqRate > 8 ? 'text-risk-red' : p.dqRate >= 4 ? 'text-risk-yellow' : 'text-risk-green'}`}>
+                      {p.dqRate.toFixed(1)}%
+                    </span>
+                  </div>
+                </button>
+                {isOpen && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="matrix-header text-left">Investor</th>
+                          <th className="matrix-header">Loans</th>
+                          <th className="matrix-header">DLQ</th>
+                          <th className="matrix-header" style={{ minWidth: 130 }}>DQ Rate</th>
+                          <th className="matrix-header">% of Prog</th>
+                          <th className="matrix-header">R</th>
+                          <th className="matrix-header">WS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {p.investors.map(inv => (
+                          <tr key={`${p.program}::${inv.investor}`} className="border-b border-border/50 hover:bg-muted/50">
+                            <td className="px-2 py-1.5 text-xs text-left font-medium whitespace-nowrap max-w-[220px] truncate" title={inv.investor}>{inv.investor}</td>
+                            <td className="matrix-cell">{inv.totalLoans.toLocaleString()}</td>
+                            <td className="matrix-cell font-medium">{inv.delinquent}</td>
+                            <td className="px-2 py-1.5">
+                              <InlineBar value={inv.dqRate} max={maxDQRate} color={riskBarColor(inv.dqRate)} />
+                            </td>
+                            <td className="matrix-cell text-muted-foreground">{inv.pctOfProgramVolume.toFixed(1)}%</td>
+                            <td className="matrix-cell">{inv.retailLoans}</td>
+                            <td className="matrix-cell">{inv.wsLoans}</td>
+                          </tr>
+                        ))}
+                        {/* Program total row */}
+                        <tr className="border-t-2 border-border bg-muted/30">
+                          <td className="px-2 py-1.5 text-xs text-left font-semibold">Program Total</td>
+                          <td className="matrix-cell font-semibold">{p.totalLoans.toLocaleString()}</td>
+                          <td className="matrix-cell font-semibold">{p.delinquent}</td>
+                          <td className="px-2 py-1.5">
+                            <InlineBar value={p.dqRate} max={maxDQRate} color={barColor} />
+                          </td>
+                          <td className="matrix-cell text-muted-foreground">100.0%</td>
+                          <td className="matrix-cell font-semibold">{p.retailLoans}</td>
+                          <td className="matrix-cell font-semibold">{p.wsLoans}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
-        {/* Right: Chart */}
+        {/* Right: Chart — top Program × Investor pairs by DLQ count */}
         <div>
-          <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">Top 10 by Delinquency Count</h3>
+          <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
+            Top 10 Program · Investor by Delinquency Count
+          </h3>
           <div className="h-80">
             <ResponsiveContainer>
-              <BarChart data={top10} layout="vertical" margin={{ left: 10, right: 20 }}>
+              <BarChart data={topMatrixRows} layout="vertical" margin={{ left: 10, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis type="number" tick={{ fontSize: 11 }} />
                 <YAxis
                   type="category"
-                  dataKey="name"
+                  dataKey="label"
                   tick={{ fontSize: 9 }}
-                  width={110}
-                  tickFormatter={(v: string) => v.length > 18 ? v.substring(0, 18) + '…' : v}
+                  width={150}
+                  tickFormatter={(v: string) => v.length > 26 ? v.substring(0, 26) + '…' : v}
                 />
                 <Tooltip
-                  formatter={(v: number, name: string, props: any) => [
-                    `${v} (${props.payload.dqRate.toFixed(1)}% DQ rate)`,
-                    'Delinquent'
+                  formatter={(v: number, _name: string, props: { payload?: { dqRate?: number } }) => [
+                    `${v} (${(props.payload?.dqRate ?? 0).toFixed(1)}% DQ rate)`,
+                    'Delinquent',
                   ]}
                 />
                 {overallDQRate > 0 && (
                   <ReferenceLine x={Math.round(overallDQRate)} stroke="#999" strokeDasharray="4 3" />
                 )}
                 <Bar dataKey="delinquent" name="Delinquent">
-                  {top10.map((p, i) => (
-                    <Cell key={i} fill={p.dqRate > 8 ? 'hsl(354, 70%, 54%)' : p.dqRate >= 4 ? 'hsl(40, 90%, 50%)' : 'hsl(213, 80%, 50%)'} />
+                  {topMatrixRows.map((r, i) => (
+                    <Cell key={i} fill={r.dqRate > 8 ? 'hsl(354, 70%, 54%)' : r.dqRate >= 4 ? 'hsl(40, 90%, 50%)' : 'hsl(213, 80%, 50%)'} />
                   ))}
                 </Bar>
               </BarChart>

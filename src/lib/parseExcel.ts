@@ -94,6 +94,7 @@ export function parseExcelFile(buffer: ArrayBuffer): ParsedLoan[] {
       LoanProgram: String(row['Loan Program'] ?? ''),
       DPAName: String(row['DPA Name'] ?? ''),
       DPAProgram: String(row['DPA Program'] ?? ''),
+      DPAInvestor: String(row['DPA Investor'] ?? ''),
       FICO: Number(row['FICO'] ?? 0),
       // Enhanced Guidelines fields — exact Encompass column headers
       Units: String(row['Subject Property # Units'] ?? ''),
@@ -121,7 +122,10 @@ export function parseExcelFile(buffer: ArrayBuffer): ParsedLoan[] {
     // field is the actual discriminator.
     const isDelinquent = raw.DQ.trim().toLowerCase() === 'yes';
     const channelLower = raw.Channel.toLowerCase();
-    const isBoost = isDPA && raw.DPAName.toLowerCase().includes('boost');
+    // Classify Boost off the high-level DPA Program bucket rather than the
+    // granular DPA Name, so all flavors of Boost (AFN Boost, Orion Boost, …)
+    // get the Enhanced Guidelines treatment consistently.
+    const isBoost = isDPA && raw.DPAProgram.toLowerCase().includes('boost');
 
     // Use the pre-computed "Pay Shock > 100" flag from the data
     // This is more reliable than the raw Payment Shock value (which can be

@@ -1,4 +1,4 @@
-import type { ParsedLoan, DashboardData, OfficeSummary, DPAProviderSummary, ChannelSummary, FICOBucket, HUDOfficeCR, TrendAnalysis, TrendDimension } from './types';
+import type { ParsedLoan, DashboardData, OfficeSummary, DPAProgramSummary, DPAInvestorSummary, ChannelSummary, FICOBucket, HUDOfficeCR, TrendAnalysis, TrendDimension } from './types';
 
 export function computeDashboard(loans: ParsedLoan[], hudData?: HUDOfficeCR[]): DashboardData {
   const totalLoans = loans.length;
@@ -17,7 +17,8 @@ export function computeDashboard(loans: ParsedLoan[], hudData?: HUDOfficeCR[]): 
     terminationRiskCount,
     dpaPortfolioConc,
     offices,
-    dpaProviders: computeDPAProviders(loans),
+    dpaPrograms: computeDPAPrograms(loans),
+    dpaMatrix: computeDPAMatrix(loans),
     retailSummary: computeChannelSummary(loans, 'Retail'),
     wsSummary: computeChannelSummary(loans, 'Wholesale'),
     ficoBuckets: computeFICO(loans),
@@ -163,26 +164,104 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
   return results.sort((a, b) => b.totalCR - a.totalCR);
 }
 
-function computeDPAProviders(loans: ParsedLoan[]): DPAProviderSummary[] {
+/**
+ * Normalize a raw DPA Program string into a stable bucket label.
+ *
+ * Neighborhood Watch exports surface a few variants per program family
+ * ("Boost", "Boost DPA", "AFN Boost", …) — normalize them into the three
+ * canonical buckets the committee cares about.
+ */
+function normalizeProgramLabel(raw: string): string {
+  const s = raw.trim();
+  if (!s) return 'Non-DPA';
+  const lower = s.toLowerCase();
+  if (lower.includes('boost')) return 'Boost';
+  if (lower.includes('arrive') || lower.includes('aurora')) return 'Arrive/Aurora';
+  return s;
+}
+
+function normalizeInvestorLabel(raw: string): string {
+  const s = raw.trim();
+  return s || 'Unassigned';
+}
+
+/**
+ * Primary DPA analytics — rolled up by DPA Program with investor drill-down.
+ *
+ * Note: we intentionally key off {@link ParsedLoan.DPAProgram} (and its
+ * high-level {@link normalizeProgramLabel} bucket) rather than DPA Name,
+ * because DPA Name is too granular ("Boost FHA Loan Program",
+ * "Boost 3.5% Repayable DPA Program", … all mean "Boost").
+ */
+function computeDPAPrograms(loans: ParsedLoan[]): DPAProgramSummary[] {
   const dpaLoans = loans.filter(l => l.isDPA);
   const totalDPA = dpaLoans.length;
-  const byProvider = new Map<string, ParsedLoan[]>();
+
+  const byProgram = new Map<string, ParsedLoan[]>();
   for (const l of dpaLoans) {
-    const name = l.DPAName || 'Unknown';
-    const arr = byProvider.get(name) || [];
+    const prog = normalizeProgramLabel(l.DPAProgram);
+    const arr = byProgram.get(prog) || [];
     arr.push(l);
-    byProvider.set(name, arr);
+    byProgram.set(prog, arr);
   }
 
-  return Array.from(byProvider.entries()).map(([name, pLoans]) => ({
-    name,
-    totalLoans: pLoans.length,
-    delinquent: pLoans.filter(l => l.isDelinquent).length,
-    dqRate: pLoans.length > 0 ? (pLoans.filter(l => l.isDelinquent).length / pLoans.length) * 100 : 0,
-    pctOfDPAVolume: totalDPA > 0 ? (pLoans.length / totalDPA) * 100 : 0,
-    retailLoans: pLoans.filter(l => l.channelType === 'Retail').length,
-    wsLoans: pLoans.filter(l => l.channelType === 'Wholesale').length,
-  })).sort((a, b) => b.delinquent - a.delinquent);
+  const programs: DPAProgramSummary[] = [];
+  for (const [program, pLoans] of byProgram) {
+    const delinquent = pLoans.filter(l => l.isDelinquent).length;
+    const programTotal = pLoans.length;
+
+    // Investor drill-down within this program
+    const byInvestor = new Map<string, ParsedLoan[]>();
+    for (const l of pLoans) {
+      const inv = normalizeInvestorLabel(l.DPAInvestor);
+      const arr = byInvestor.get(inv) || [];
+      arr.push(l);
+      byInvestor.set(inv, arr);
+    }
+
+    const investors: DPAInvestorSummary[] = Array.from(byInvestor.entries())
+      .map(([investor, iLoans]) => {
+        const iDLQ = iLoans.filter(l => l.isDelinquent).length;
+        return {
+          investor,
+          program,
+          totalLoans: iLoans.length,
+          delinquent: iDLQ,
+          dqRate: iLoans.length > 0 ? (iDLQ / iLoans.length) * 100 : 0,
+          pctOfProgramVolume: programTotal > 0 ? (iLoans.length / programTotal) * 100 : 0,
+          pctOfDPAVolume: totalDPA > 0 ? (iLoans.length / totalDPA) * 100 : 0,
+          retailLoans: iLoans.filter(l => l.channelType === 'Retail').length,
+          wsLoans: iLoans.filter(l => l.channelType === 'Wholesale').length,
+        };
+      })
+      .sort((a, b) => b.delinquent - a.delinquent);
+
+    programs.push({
+      program,
+      totalLoans: programTotal,
+      delinquent,
+      dqRate: programTotal > 0 ? (delinquent / programTotal) * 100 : 0,
+      pctOfDPAVolume: totalDPA > 0 ? (programTotal / totalDPA) * 100 : 0,
+      retailLoans: pLoans.filter(l => l.channelType === 'Retail').length,
+      wsLoans: pLoans.filter(l => l.channelType === 'Wholesale').length,
+      investors,
+    });
+  }
+
+  return programs.sort((a, b) => b.delinquent - a.delinquent);
+}
+
+/**
+ * Flat Program × Investor matrix — one row per (program, investor) pair.
+ * Useful for PDF export and CSV downloads.
+ */
+function computeDPAMatrix(loans: ParsedLoan[]): DPAInvestorSummary[] {
+  const programs = computeDPAPrograms(loans);
+  const rows: DPAInvestorSummary[] = [];
+  for (const p of programs) {
+    for (const inv of p.investors) rows.push(inv);
+  }
+  return rows.sort((a, b) => b.delinquent - a.delinquent);
 }
 
 function computeChannelSummary(loans: ParsedLoan[], channel: 'Retail' | 'Wholesale'): ChannelSummary {

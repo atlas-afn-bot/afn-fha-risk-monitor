@@ -334,7 +334,7 @@ export default function Index() {
               </div>
 
               <div id="section-dpa">
-                <DPAProviderTable providers={data.dpaProviders} overallDQRate={data.overallDQRate} />
+                <DPAProviderTable programs={data.dpaPrograms} overallDQRate={data.overallDQRate} />
               </div>
 
               <div id="section-channel">

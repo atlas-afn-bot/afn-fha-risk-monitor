@@ -42,10 +42,17 @@ function buildDataSummary(data: DashboardData): string {
     .map(o => `  - ${o.name}: Total CR ${o.totalCR}%, ${o.totalLoans} loans, ${o.totalDLQ} DLQ, DPA Conc: ${o.totalDPAConc.toFixed(1)}%`)
     .join('\n');
 
-  const topProviders = [...data.dpaProviders]
+  // DPA breakdown: primary view by Program (Boost / Arrive-Aurora / …),
+  // with a secondary per-Investor drill-down inside each program.
+  const programBreakdown = [...data.dpaPrograms]
     .sort((a, b) => b.delinquent - a.delinquent)
-    .slice(0, 5)
-    .map(p => `  - ${p.name}: ${p.totalLoans} loans, ${p.delinquent} DLQ (${p.dqRate.toFixed(1)}%), ${p.pctOfDPAVolume.toFixed(1)}% of DPA volume`)
+    .map(p => {
+      const investorLines = p.investors
+        .slice(0, 5)
+        .map(i => `      · Investor ${i.investor}: ${i.totalLoans} loans, ${i.delinquent} DLQ (${i.dqRate.toFixed(1)}%), ${i.pctOfProgramVolume.toFixed(1)}% of program`)
+        .join('\n');
+      return `  - Program ${p.program}: ${p.totalLoans} loans, ${p.delinquent} DLQ (${p.dqRate.toFixed(1)}%), ${p.pctOfDPAVolume.toFixed(1)}% of DPA volume${investorLines ? '\n' + investorLines : ''}`;
+    })
     .join('\n');
 
   const { standardDQ, dpaDQ } = data.programComposition;
@@ -73,8 +80,8 @@ TOP 5 CREDIT WATCH OFFICES:
 ${cwTop5 || '  None'}
 Total Credit Watch: ${cwOffices.length} offices
 
-TOP DPA PROVIDERS BY DELINQUENCY:
-${topProviders}
+DPA PROGRAM × INVESTOR BREAKDOWN (primary = DPA Program, secondary = DPA Investor):
+${programBreakdown}
 
 FICO ANALYSIS:
 ${data.ficoBuckets.map(b => `  ${b.label}: Standard ${b.standardDQ.toFixed(1)}%, DPA ${b.dpaDQ.toFixed(1)}% (${b.dpaTotal} DPA loans)`).join('\n')}
