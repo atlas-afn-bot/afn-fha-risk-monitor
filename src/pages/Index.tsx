@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { buildDashboardFromSnapshot } from '@/lib/computeData';
 import type { DashboardData } from '@/lib/types';
 import type { Snapshot, SnapshotIndex } from '@/types/snapshot';
@@ -7,35 +8,43 @@ import { historicalTrend } from '@/lib/historicalData';
 import type { HUDMonthlySnapshot } from '@/lib/hudHistory';
 import SummaryCards from '@/components/SummaryCards';
 import TrendChart from '@/components/TrendChart';
-import PerformanceMatrix from '@/components/PerformanceMatrix';
-import CreditWatchSimple from '@/components/CreditWatchSimple';
-import PortfolioComposition from '@/components/PortfolioComposition';
-import DPAProviderTable from '@/components/DPAProviderTable';
-import ChannelAnalysis from '@/components/ChannelAnalysis';
-import FICODistribution from '@/components/FICODistribution';
-import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import AIInsights from '@/components/AIInsights';
 import MonthSelector from '@/components/MonthSelector';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import HOCAnalysis from '@/components/tabs/HOCAnalysis';
+import BranchCompareRatios, {
+  defaultBranchTabState,
+  type BranchTabState,
+} from '@/components/tabs/BranchCompareRatios';
+import DeepDive, { type DeepDiveSubTab } from '@/components/tabs/DeepDive';
+import Delinquencies from '@/components/tabs/Delinquencies';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
-  LayoutDashboard, TrendingUp, AlertTriangle, Shield, PieChart,
-  Users, GitCompare, BarChart3, MapPin, Moon, Sun, FileDown, Activity, Loader2,
+  Moon, Sun, FileDown, Loader2, AlertTriangle,
 } from 'lucide-react';
 
-const NAV_ITEMS = [
-  { id: 'summary', label: 'Summary', icon: LayoutDashboard },
-  { id: 'trend', label: 'CR Trend', icon: TrendingUp },
-  { id: 'termination', label: 'Termination Risk', icon: AlertTriangle },
-  { id: 'creditwatch', label: 'Credit Watch', icon: Shield },
-  { id: 'portfolio', label: 'Portfolio', icon: PieChart },
-  { id: 'dpa', label: 'DPA Providers', icon: Users },
-  { id: 'channel', label: 'Channel', icon: GitCompare },
-  { id: 'riskfactors', label: 'Risk Factors', icon: Activity },
-  { id: 'fico', label: 'FICO', icon: BarChart3 },
-  { id: 'hud', label: 'HUD Offices', icon: MapPin },
+type TabId = 'overview' | 'hud-offices' | 'hoc' | 'branches-hud' | 'deep-dive' | 'delinquencies';
+
+const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
+  { id: 'overview',     emoji: '📊', label: 'Overview' },
+  { id: 'hud-offices',  emoji: '🏢', label: 'HUD Field Offices' },
+  { id: 'hoc',          emoji: '🌎', label: 'HOC Analysis' },
+  { id: 'branches-hud', emoji: '🏬', label: 'Branch Compare Ratios' },
+  { id: 'deep-dive',    emoji: '👥', label: 'Loan Data Deep Dive' },
+  { id: 'delinquencies', emoji: '⚠️', label: 'Delinquencies' },
 ];
+
+const VALID_TABS = new Set<TabId>(TAB_DEFS.map(t => t.id));
+const VALID_SUBS = new Set<DeepDiveSubTab>(['lo', 'uw', 'tpo', 'branch']);
+
+function isTabId(v: string | null): v is TabId {
+  return !!v && VALID_TABS.has(v as TabId);
+}
+function isSubTab(v: string | null): v is DeepDiveSubTab {
+  return !!v && VALID_SUBS.has(v as DeepDiveSubTab);
+}
 
 /**
  * Build the trend chart series from hardcoded history + the currently loaded
@@ -101,8 +110,20 @@ export default function Index() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(false);
-  const [activeSection, setActiveSection] = useState('summary');
   const [selectedPeriod, setSelectedPeriod] = useState<string>('');
+
+  // ── Tab state synced to URL ────────────────────────────────────────────────
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = isTabId(searchParams.get('tab')) ? (searchParams.get('tab') as TabId) : 'overview';
+  const initialSub = isSubTab(searchParams.get('sub')) ? (searchParams.get('sub') as DeepDiveSubTab) : 'lo';
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [deepDiveSub, setDeepDiveSub] = useState<DeepDiveSubTab>(initialSub);
+  // Track which tabs have been visited so far so we can lazy-mount expensive
+  // panels (LO Risk, HUD Concentration, etc.) only after first visit.
+  const [visited, setVisited] = useState<Set<TabId>>(() => new Set([initialTab]));
+
+  // Tab-level state that should persist across switches
+  const [branchTabState, setBranchTabState] = useState<BranchTabState>(defaultBranchTabState);
 
   // Bootstrap: load the index + latest snapshot on cold start.
   useEffect(() => {
@@ -130,6 +151,22 @@ export default function Index() {
     return () => { cancelled = true; };
   }, []);
 
+  // React to back/forward / paste-with-tab. We watch searchParams (not just
+  // the initial mount) so deep links and history navigation both land on the
+  // right tab.
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (isTabId(t) && t !== activeTab) {
+      setActiveTab(t);
+      setVisited(prev => prev.has(t) ? prev : new Set(prev).add(t));
+    }
+    const s = searchParams.get('sub');
+    if (isSubTab(s) && s !== deepDiveSub) {
+      setDeepDiveSub(s);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const handlePeriodChange = useCallback(async (period: string) => {
     if (!index || period === selectedPeriod) return;
     setSelectedPeriod(period);
@@ -154,10 +191,27 @@ export default function Index() {
     });
   }, []);
 
-  const scrollTo = (id: string) => {
-    setActiveSection(id);
-    document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const handleTabChange = useCallback((next: string) => {
+    if (!isTabId(next)) return;
+    setActiveTab(next);
+    setVisited(prev => prev.has(next) ? prev : new Set(prev).add(next));
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', next);
+    if (next !== 'deep-dive') params.delete('sub');
+    else if (!params.get('sub')) params.set('sub', deepDiveSub);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams, deepDiveSub]);
+
+  const handleSubChange = useCallback((next: DeepDiveSubTab) => {
+    setDeepDiveSub(next);
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', 'deep-dive');
+    params.set('sub', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // Container ref so the sticky tab bar measures correctly.
+  const mainScrollRef = useRef<HTMLElement | null>(null);
 
   const hudHistory = useMemo(() => buildTrendHistory(snapshot), [snapshot]);
   const performancePeriod = snapshot?.snapshot_meta.performance_period_label
@@ -174,18 +228,18 @@ export default function Index() {
           <p className="text-[10px] text-nav-foreground/60 mt-0.5">Loan-Level Analytics</p>
         </div>
         <nav className="flex-1 p-2 space-y-0.5">
-          {NAV_ITEMS.map(item => (
+          {TAB_DEFS.map(item => (
             <button
               key={item.id}
-              onClick={() => scrollTo(item.id)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${
-                activeSection === item.id
+              onClick={() => handleTabChange(item.id)}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors text-left ${
+                activeTab === item.id
                   ? 'bg-sidebar-accent text-sidebar-accent-foreground'
                   : 'text-nav-foreground/70 hover:text-nav-foreground hover:bg-sidebar-accent/50'
               }`}
             >
-              <item.icon className="w-3.5 h-3.5" />
-              {item.label}
+              <span className="w-4 inline-block text-center">{item.emoji}</span>
+              <span className="truncate">{item.label}</span>
             </button>
           ))}
         </nav>
@@ -198,7 +252,7 @@ export default function Index() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-y-auto">
+      <main ref={mainScrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-[1600px] mx-auto p-6 space-y-6">
           {loading && !data && (
             <div className="flex items-center justify-center gap-3 py-24 text-muted-foreground">
@@ -231,7 +285,7 @@ export default function Index() {
                 </p>
               </div>
 
-              {/* Header */}
+              {/* Header (always visible across tabs) */}
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <p className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">American Financial Network, Inc.</p>
@@ -274,66 +328,145 @@ export default function Index() {
                 </div>
               )}
 
-              <div id="section-summary" className="space-y-4">
-                <SummaryCards data={data} snapshot={snapshot} />
-                <ExecutiveSummary data={data} />
-              </div>
+              {/* Tabs */}
+              <Tabs value={activeTab} onValueChange={handleTabChange}>
+                <div className="sticky top-0 z-20 -mx-6 px-6 py-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75 border-b border-border">
+                  <TabsList className="h-auto flex-wrap gap-1 bg-transparent p-0">
+                    {TAB_DEFS.map(t => (
+                      <TabsTrigger
+                        key={t.id}
+                        value={t.id}
+                        className="gap-1.5 data-[state=active]:bg-muted"
+                      >
+                        <span aria-hidden>{t.emoji}</span>
+                        <span className="hidden sm:inline">{t.label}</span>
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </div>
 
-              <div id="section-trend">
-                <TrendChart history={hudHistory} />
-              </div>
+                {/* Overview */}
+                <TabsContent value="overview" className="space-y-6">
+                  {visited.has('overview') && (
+                    <>
+                      <SummaryCards data={data} snapshot={snapshot} />
+                      <ExecutiveSummary data={data} />
+                      <TrendChart history={hudHistory} />
+                      <AIInsights />
+                      <SnapshotMetadataCard snapshot={snapshot} data={data} />
+                    </>
+                  )}
+                </TabsContent>
 
-              <div id="section-ai-insights">
-                <AIInsights />
-              </div>
+                {/* HUD Field Offices */}
+                <TabsContent value="hud-offices">
+                  {visited.has('hud-offices') && <HUDConcentration data={data} />}
+                </TabsContent>
 
-              <div id="section-termination">
-                <PerformanceMatrix
-                  offices={data.offices}
-                  title="Termination Risk Offices — Performance Matrix"
-                  emoji="🚨"
-                  filterFn={o => o.totalCR > 200 && o.totalLoans > 100}
-                />
-              </div>
+                {/* HOC Analysis */}
+                <TabsContent value="hoc">
+                  {visited.has('hoc') && <HOCAnalysis snapshot={snapshot} />}
+                </TabsContent>
 
-              <div id="section-creditwatch" className="space-y-4">
-                <PerformanceMatrix
-                  offices={data.offices}
-                  title="Credit Watch — Top 5 Priority"
-                  emoji="⚠️"
-                  filterFn={o => o.totalCR >= 150 && o.totalCR <= 200 && o.totalLoans >= 100}
-                  maxRows={5}
-                />
-                <CreditWatchSimple offices={data.offices} />
-              </div>
+                {/* Branch Compare Ratios */}
+                <TabsContent value="branches-hud">
+                  {visited.has('branches-hud') && (
+                    <BranchCompareRatios
+                      snapshot={snapshot}
+                      state={branchTabState}
+                      onState={setBranchTabState}
+                    />
+                  )}
+                </TabsContent>
 
-              <div id="section-portfolio">
-                <PortfolioComposition data={data} />
-              </div>
+                {/* Deep Dive */}
+                <TabsContent value="deep-dive">
+                  {visited.has('deep-dive') && (
+                    <DeepDive
+                      snapshot={snapshot}
+                      data={data}
+                      subTab={deepDiveSub}
+                      onSubTabChange={handleSubChange}
+                    />
+                  )}
+                </TabsContent>
 
-              <div id="section-dpa">
-                <DPAProviderTable programs={data.dpaPrograms} overallDQRate={data.overallDQRate} />
-              </div>
-
-              <div id="section-channel">
-                <ChannelAnalysis retail={data.retailSummary} wholesale={data.wsSummary} />
-              </div>
-
-              <div id="section-riskfactors">
-                <RiskFactorCharts trends={data.trendAnalysis} overallDQRate={data.overallDQRate} />
-              </div>
-
-              <div id="section-fico">
-                <FICODistribution buckets={data.ficoBuckets} />
-              </div>
-
-              <div id="section-hud">
-                <HUDConcentration data={data} />
-              </div>
+                {/* Delinquencies */}
+                <TabsContent value="delinquencies">
+                  {visited.has('delinquencies') && (
+                    <Delinquencies snapshot={snapshot} data={data} />
+                  )}
+                </TabsContent>
+              </Tabs>
             </>
           )}
         </div>
       </main>
+    </div>
+  );
+}
+
+/**
+ * Snapshot metadata block for the Overview tab — surfaces the bookkeeping
+ * info we already carry in `snapshot_meta` so reviewers can see the source
+ * trail at a glance.
+ */
+function SnapshotMetadataCard({ snapshot, data }: { snapshot: Snapshot; data: DashboardData }) {
+  const m = snapshot.snapshot_meta;
+  return (
+    <div className="bg-card rounded-lg border border-border p-6">
+      <h3 className="text-sm font-semibold mb-3">Snapshot Metadata</h3>
+      <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+        <div className="flex justify-between sm:block">
+          <dt className="text-muted-foreground">Period</dt>
+          <dd className="font-medium">{m.label} ({m.period})</dd>
+        </div>
+        <div className="flex justify-between sm:block">
+          <dt className="text-muted-foreground">Performance Period</dt>
+          <dd className="font-medium">{m.performance_period_label}</dd>
+        </div>
+        <div className="flex justify-between sm:block">
+          <dt className="text-muted-foreground">As-of Date</dt>
+          <dd className="font-medium">{m.performance_period}</dd>
+        </div>
+        <div className="flex justify-between sm:block">
+          <dt className="text-muted-foreground">Generated</dt>
+          <dd className="font-medium">{new Date(m.generated_at).toLocaleString()}</dd>
+        </div>
+        <div className="flex justify-between sm:block">
+          <dt className="text-muted-foreground">Generated By</dt>
+          <dd className="font-mono text-[11px]">{m.generated_by}</dd>
+        </div>
+        <div className="flex justify-between sm:block">
+          <dt className="text-muted-foreground">Schema Version</dt>
+          <dd className="font-medium">v{m.schema_version}</dd>
+        </div>
+        <div className="flex justify-between sm:block sm:col-span-2">
+          <dt className="text-muted-foreground">Record Counts</dt>
+          <dd className="font-medium">
+            {data.totalLoans.toLocaleString()} loans · {snapshot.compare_ratios_hud_office.length} HUD offices ·{' '}
+            {snapshot.compare_ratios_branch.length} branches · {snapshot.loan_officer_performance.length} LOs ·{' '}
+            {(snapshot.underwriter_rollup ?? []).length} underwriters ·{' '}
+            {(snapshot.sponsor_tpo_detail ?? []).length} TPOs
+          </dd>
+        </div>
+        {m.source_files && m.source_files.length > 0 && (
+          <div className="sm:col-span-2">
+            <dt className="text-muted-foreground mb-1">Source Files</dt>
+            <dd>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px] font-mono">
+                {m.source_files.map(f => <li key={f}>{f}</li>)}
+              </ul>
+            </dd>
+          </div>
+        )}
+        {m.notes && (
+          <div className="sm:col-span-2">
+            <dt className="text-muted-foreground mb-1">Notes</dt>
+            <dd className="text-[11px]">{m.notes}</dd>
+          </div>
+        )}
+      </dl>
     </div>
   );
 }
