@@ -2,7 +2,7 @@
 
 Loan-level analytics dashboard for the HUD Compare Ratio Committee at American Financial Network (AFN).
 
-Parses Encompass Neighborhood Watch and HUD Field Offices Excel data to surface termination risk, delinquency trends, and portfolio risk factors — all client-side, no backend required.
+Consumes pre-built monthly JSON snapshots (committed under `public/data/snapshots/`) to surface termination risk, delinquency trends, and portfolio risk factors. Snapshots are synthesized from six source Excel files by `scripts/build-snapshot.py` and served as static assets — no backend required at runtime.
 
 ## Features
 
@@ -37,29 +37,64 @@ Automatically identifies delinquent Boost DPA loans that would not have been ori
 - **PDF Export** — Full committee-format report with trend chart, performance matrices, executive summary, channel comparison, DPA providers, portfolio composition, and action items
 - **CSV Export** — Per-table CSV downloads
 
-## Data Sources
+## Data Pipeline
 
-### Required Uploads
-1. **Encompass Neighborhood Watch Excel** (~9,400 rows, 167 columns) — Loan-level data
-2. **HUD Field Offices Excel** — Office-level compare ratios and area delinquency rates
+### Architecture
+The dashboard does **not** parse Excel at runtime. Each month, the RPA process writes six HUD / Encompass `.xlsx` files into `data/source/{YYYY-MM}/`; the Python build script consumes them and emits a single JSON snapshot under `public/data/snapshots/{YYYY-MM}.json` (plus an updated `index.json`). The dashboard fetches that JSON on page load.
 
-### Key Encompass Columns Used
-| Column | Field | Purpose |
-|--------|-------|---------|
-| A | DQ | Delinquency flag |
-| G | HUD Office | Office grouping |
-| J | Loan Info Channel | Retail vs Wholesale |
-| R | Loan Program | DPA/Standard classification (legacy "FUEL" values are classified as Standard; use Channel column for Retail/Wholesale split) |
-| V | Subject Property # Units | Enhanced Guidelines (3-4 unit filter) |
-| AF | Gift Fund Amount | Enhanced Guidelines (gift fund restriction) |
-| AJ | Payment Shock | Enhanced Guidelines (shock limit) |
-| AN | Underwriting Risk Assess Type | Enhanced Guidelines (Manual vs DU/LP) |
-| AU | Reserves | Enhanced Guidelines (reserve requirements) |
-| AW | DPA Name | DPA provider identification |
-| BF | FICO | Credit score analysis |
+Snapshots are committed to the repo today. A follow-up PR will move them to Azure Blob Storage.
 
-### Historical Data
-Monthly HUD compare ratios are stored in IndexedDB. Each HUD file upload automatically saves a snapshot. Pre-seeded with Jan 2024 — Feb 2026 data.
+### Source files (per period)
+1. `HUD Total Compare Ratios *.xlsx` — nationwide Total / Retail / Sponsor KPIs
+2. `HOC Compare Ratios - *.xlsx` — the 4 HUD Homeownership Centers
+3. `HUD Field Offices - *.xlsx` — ~80 HUD offices with compare ratios + area DQ
+4. `HUD Branches - *.xlsx` — ~90 NMLS-level branches with approval status
+5. `NW Data *.xlsx` — HUD's seriously-delinquent list (joinable by Case Number)
+6. `Neighborhood Watch Report <period> Feb Enc Data.xlsx` — full Encompass export (~9,400 loans × 168 columns)
+
+Raw source files are **gitignored** (customer data). Do not commit them.
+
+### Target JSON shape
+One file per period under `public/data/snapshots/`, matching
+[`src/types/snapshot.ts`](./src/types/snapshot.ts) and validated by
+[`data/snapshot.schema.json`](./data/snapshot.schema.json). The shape mirrors
+the SQL DDL at [`db/migrations/001_initial_schema.sql`](./db/migrations/001_initial_schema.sql)
+one-to-one (8 fact collections + meta).
+
+### How to build a new snapshot
+
+```bash
+# 1. Drop the month's 6 .xlsx files into data/source/<YYYY-MM>/
+#    (mkdir -p data/source/2026-03)
+
+# 2. Install Python deps (one-time)
+pip install -r scripts/requirements.txt
+# → pandas, openpyxl
+
+# 3. Build the snapshot JSON
+python3 scripts/build-snapshot.py 2026-03
+
+# This produces:
+#   public/data/snapshots/2026-03.json       (one per period, ~14 MB)
+#   public/data/snapshots/index.json         (updated — lists all periods)
+
+# 4. Commit the new JSON + updated index; DO NOT commit data/source/*.xlsx
+git add public/data/snapshots/2026-03.json public/data/snapshots/index.json
+git commit -m "data: add 2026-03 snapshot"
+
+# 5. Verify locally
+npm run dev
+# The month selector in the dashboard header should show the new period.
+```
+
+The script is **idempotent** — rerunning overwrites the snapshot cleanly.
+If field mappings or bucket boundaries need to change, edit
+`scripts/build-snapshot.py` and rerun.
+
+### Historical trend data
+Hardcoded values for Jan 2024 through the previous month live in
+`src/lib/historicalData.ts`. They're overlaid on the current snapshot's
+top-line compare ratios to render the 26-month trend chart.
 
 ## Tech Stack
 
@@ -67,9 +102,10 @@ Monthly HUD compare ratios are stored in IndexedDB. Each HUD file upload automat
 - **Vite** build system
 - **Tailwind CSS** + shadcn/ui components
 - **Recharts** for charts
-- **SheetJS (xlsx)** for Excel parsing
+- **JSON snapshots** served as static assets (`public/data/snapshots/`)
+- **Python + pandas + openpyxl** for the offline synthesis pipeline
 - **jsPDF** + jspdf-autotable for PDF export
-- **IndexedDB** for historical data persistence
+- **IndexedDB** for action-item persistence
 - **Azure OpenAI** for AI analysis
 
 ## Getting Started
@@ -115,23 +151,39 @@ src/
 │   └── TrendChart.tsx           # Historical CR trend line
 ├── lib/
 │   ├── aiAnalysis.ts            # Azure OpenAI integration
-│   ├── computeData.ts           # All dashboard computations
+│   ├── computeData.ts           # Snapshot → dashboard data adapter
 │   ├── exportPDF.ts             # PDF report generation
-│   ├── fakeData.ts              # Synthetic data generator for dev
 │   ├── historicalData.ts        # Seed data for trend chart
-│   ├── hudHistory.ts            # IndexedDB persistence layer
-│   ├── parseExcel.ts            # Encompass Excel parser + Enhanced Guidelines
-│   ├── parseHUD.ts              # HUD Field Offices parser
-│   └── types.ts                 # TypeScript interfaces
-└── pages/
-    └── Index.tsx                # Main dashboard page
+│   ├── hudHistory.ts            # HUD snapshot type for trend chart
+│   ├── snapshotLoader.ts        # Fetch + validate monthly JSON snapshots
+│   └── types.ts                 # Legacy dashboard view-model types
+├── pages/
+│   └── Index.tsx                # Main dashboard page
+└── types/
+    └── snapshot.ts              # Snapshot contract (mirrors SQL + JSON Schema)
+
+scripts/
+└── build-snapshot.py            # Python synthesis: 6 .xlsx → 1 snapshot JSON
+
+data/
+├── schema.md                    # Human-readable snapshot schema docs
+├── snapshot.schema.json         # JSON Schema for validation
+└── source/<YYYY-MM>/            # Raw monthly .xlsx inputs (gitignored)
+
+db/migrations/
+└── 001_initial_schema.sql       # SQL DDL (future state — blob → SQL)
+
+public/data/snapshots/
+├── index.json                   # List of available periods
+└── <YYYY-MM>.json               # One per period — ~14 MB each
 ```
 
 ## Roadmap
 
+- [ ] Move snapshots to Azure Blob Storage (currently committed to repo)
+- [ ] Automate monthly snapshot build via GitHub Action when RPA drops files
+- [ ] Loan Officer Leaderboard view wired to `loan_officer_performance`
 - [ ] Microsoft SSO (Azure AD) — restrict access to AFN employees
-- [ ] Deploy to Azure Static Web Apps or similar
-- [ ] Automated monthly data pipeline
 
 ---
 

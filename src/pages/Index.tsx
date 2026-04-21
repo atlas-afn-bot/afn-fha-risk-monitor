@@ -1,12 +1,10 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { generateFakeData } from '@/lib/fakeData';
-import { parseExcelFile } from '@/lib/parseExcel';
-import { parseHUDFile } from '@/lib/parseHUD';
-import { saveHUDSnapshot, getAllSnapshots, extractSnapshotFromHUD, type HUDMonthlySnapshot } from '@/lib/hudHistory';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { buildDashboardFromSnapshot } from '@/lib/computeData';
+import type { DashboardData } from '@/lib/types';
+import type { Snapshot, SnapshotIndex } from '@/types/snapshot';
+import { loadSnapshotIndex, loadSnapshot } from '@/lib/snapshotLoader';
 import { historicalTrend } from '@/lib/historicalData';
-import { computeDashboard } from '@/lib/computeData';
-import type { DashboardData, ParsedLoan, HUDOfficeCR } from '@/lib/types';
-import FileUpload from '@/components/FileUpload';
+import type { HUDMonthlySnapshot } from '@/lib/hudHistory';
 import SummaryCards from '@/components/SummaryCards';
 import TrendChart from '@/components/TrendChart';
 import PerformanceMatrix from '@/components/PerformanceMatrix';
@@ -19,10 +17,11 @@ import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import ActionItems from '@/components/ActionItems';
+import MonthSelector from '@/components/MonthSelector';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
   LayoutDashboard, TrendingUp, AlertTriangle, Shield, PieChart,
-  Users, GitCompare, BarChart3, MapPin, Upload, Moon, Sun, Database, FileDown, Activity
+  Users, GitCompare, BarChart3, MapPin, Moon, Sun, FileDown, Activity, Loader2,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -38,108 +37,116 @@ const NAV_ITEMS = [
   { id: 'hud', label: 'HUD Offices', icon: MapPin },
 ];
 
+/**
+ * Build the trend chart series from hardcoded history + the currently loaded
+ * snapshot. Previously this came from IndexedDB (populated by the old HUD
+ * file upload flow); with JSON snapshots we overlay the active snapshot's
+ * top-line compare ratios on top of the long-running hardcoded series.
+ */
+function buildTrendHistory(snapshot: Snapshot | null): HUDMonthlySnapshot[] {
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const seeded: HUDMonthlySnapshot[] = historicalTrend.map(h => {
+    const [mon, year] = h.month.split(' ');
+    const monthIdx = monthNames.indexOf(mon);
+    const mm = String(monthIdx + 1).padStart(2, '0');
+    return {
+      monthKey: `${year}-${mm}`,
+      label: h.month,
+      performancePeriodEnd: `${mon} ${year}`,
+      overallCR: h.overall,
+      retailCR: h.retail,
+      wholesaleCR: h.wholesale,
+      totalLoans: 0,
+      totalDLQ: 0,
+      dqRate: 0,
+      storedAt: '',
+    };
+  });
+
+  if (!snapshot) return seeded;
+
+  const total = snapshot.compare_ratios_total.find(r => r.scope === 'total');
+  const retail = snapshot.compare_ratios_total.find(r => r.scope === 'retail');
+  const sponsor = snapshot.compare_ratios_total.find(r => r.scope === 'sponsor');
+  if (!total) return seeded;
+
+  const [y, m] = snapshot.snapshot_meta.period.split('-');
+  const monthLabel = `${monthNames[parseInt(m, 10) - 1]} ${y}`;
+
+  const snapshotEntry: HUDMonthlySnapshot = {
+    monthKey: snapshot.snapshot_meta.period,
+    label: monthLabel,
+    performancePeriodEnd: snapshot.snapshot_meta.performance_period,
+    overallCR: total.compare_ratio ?? 0,
+    retailCR: retail?.compare_ratio ?? 0,
+    wholesaleCR: sponsor?.compare_ratio ?? 0,
+    totalLoans: total.loans_count ?? 0,
+    totalDLQ: total.delinquent_count ?? 0,
+    dqRate: (total.loans_count ?? 0) > 0
+      ? ((total.delinquent_count ?? 0) / (total.loans_count ?? 1)) * 100
+      : 0,
+    storedAt: snapshot.snapshot_meta.generated_at,
+  };
+
+  const merged = seeded.filter(s => s.monthKey !== snapshotEntry.monthKey);
+  merged.push(snapshotEntry);
+  merged.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  return merged;
+}
+
 export default function Index() {
+  const [index, setIndex] = useState<SnapshotIndex | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(false);
   const [activeSection, setActiveSection] = useState('summary');
-  const mainRef = useRef<HTMLDivElement>(null);
-  const [loans, setLoans] = useState<ParsedLoan[] | null>(null);
-  const [hudData, setHudData] = useState<HUDOfficeCR[] | null>(null);
-  const [encompassFileName, setEncompassFileName] = useState<string | null>(null);
-  const [hudFileName, setHudFileName] = useState<string | null>(null);
   const [allActionItems, setAllActionItems] = useState<string[]>([]);
-  const [performancePeriod, setPerformancePeriod] = useState<string>('');
-  const [hudHistory, setHudHistory] = useState<HUDMonthlySnapshot[]>([]);
+  const [selectedPeriod, setSelectedPeriod] = useState<string>('');
 
-  // Load historical HUD data on mount, seed with hardcoded data if empty
+  // Bootstrap: load the index + latest snapshot on cold start.
   useEffect(() => {
-    getAllSnapshots().then(async (existing) => {
-      if (existing.length === 0 && historicalTrend.length > 0) {
-        // Seed with hardcoded historical data
-        for (const h of historicalTrend) {
-          const parts = h.month.split(' ');
-          const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-          const monthIdx = monthNames.indexOf(parts[0]);
-          if (monthIdx >= 0) {
-            const mm = String(monthIdx + 1).padStart(2, '0');
-            await saveHUDSnapshot({
-              monthKey: `${parts[1]}-${mm}`,
-              label: h.month,
-              performancePeriodEnd: `${parts[0]} ${parts[1]}`,
-              overallCR: h.overall,
-              retailCR: h.retail,
-              wholesaleCR: h.wholesale,
-              totalLoans: 0,
-              totalDLQ: 0,
-              dqRate: 0,
-              storedAt: new Date().toISOString(),
-            });
-          }
-        }
-        const seeded = await getAllSnapshots();
-        setHudHistory(seeded);
-      } else {
-        setHudHistory(existing);
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const idx = await loadSnapshotIndex();
+        if (cancelled) return;
+        setIndex(idx);
+        const target = idx.periods[0].period;
+        setSelectedPeriod(target);
+        const snap = await loadSnapshot(target);
+        if (cancelled) return;
+        setSnapshot(snap);
+        setData(buildDashboardFromSnapshot(snap));
+      } catch (e: any) {
+        console.error('Failed to load snapshot', e);
+        if (!cancelled) setError(e?.message || 'Failed to load snapshot');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }).catch(console.error);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  const recompute = useCallback((l: ParsedLoan[], h: HUDOfficeCR[] | null) => {
-    setData(computeDashboard(l, h ?? undefined));
-  }, []);
-
-  // Auto-compute when both files are loaded
-  useEffect(() => {
-    if (loans && hudData && !data) {
-      recompute(loans, hudData);
+  const handlePeriodChange = useCallback(async (period: string) => {
+    if (!index || period === selectedPeriod) return;
+    setSelectedPeriod(period);
+    setLoading(true);
+    setError(null);
+    try {
+      const snap = await loadSnapshot(period);
+      setSnapshot(snap);
+      setData(buildDashboardFromSnapshot(snap));
+    } catch (e: any) {
+      console.error('Failed to switch period', e);
+      setError(e?.message || 'Failed to load snapshot');
+    } finally {
+      setLoading(false);
     }
-  }, [loans, hudData, data, recompute]);
-
-  const handleEncompassLoaded = useCallback((parsedLoans: ParsedLoan[]) => {
-    setLoans(parsedLoans);
-    if (hudData) recompute(parsedLoans, hudData);
-  }, [hudData, recompute]);
-
-  const handleHUDLoaded = useCallback((file: File) => {
-    setHudFileName(file.name);
-    file.arrayBuffer().then(buf => {
-      const result = parseHUDFile(buf);
-      if (result.performancePeriod) setPerformancePeriod(result.performancePeriod);
-      const mapped: HUDOfficeCR[] = result.offices.map(o => ({
-        name: o.name,
-        totalCR: o.totalCR,
-        retailCR: o.retailCR,
-        wsCR: o.wsCR,
-        totalLoansUW: o.totalLoansUW,
-        totalDLQ: o.totalDLQ,
-        retailLoans: o.retailLoans,
-        retailDLQ: o.retailDLQ,
-        sponsoredLoans: o.sponsoredLoans,
-        sponsoredDLQ: o.sponsoredDLQ,
-        areaRetailDQPct: o.areaRetailDQPct,
-        areaSponsoredDQPct: o.areaSponsoredDQPct,
-        hudOfficeDQPct: o.hudOfficeDQPct,
-      }));
-      setHudData(mapped);
-      if (loans) recompute(loans, mapped);
-
-      // Store snapshot in IndexedDB for trend history
-      if (result.performancePeriod) {
-        const snapshot = extractSnapshotFromHUD(result.offices, result.performancePeriod);
-        if (snapshot) {
-          saveHUDSnapshot(snapshot).then(() => {
-            getAllSnapshots().then(setHudHistory);
-          }).catch(console.error);
-        }
-      }
-    });
-  }, [loans, recompute]);
-
-  const loadDemo = useCallback(() => {
-    const demoLoans = generateFakeData();
-    setLoans(demoLoans);
-    recompute(demoLoans, hudData);
-  }, [hudData, recompute]);
+  }, [index, selectedPeriod]);
 
   const toggleTheme = useCallback(() => {
     setIsDark(prev => {
@@ -152,6 +159,11 @@ export default function Index() {
     setActiveSection(id);
     document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  const hudHistory = useMemo(() => buildTrendHistory(snapshot), [snapshot]);
+  const performancePeriod = snapshot?.snapshot_meta.performance_period_label
+    ?? snapshot?.snapshot_meta.label
+    ?? '';
 
   return (
     <div className="flex min-h-screen">
@@ -187,71 +199,31 @@ export default function Index() {
       </aside>
 
       {/* Main */}
-      <main ref={mainRef} className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto">
         <div className="max-w-[1600px] mx-auto p-6 space-y-6">
-          {/* Upload area */}
-          {(!loans || !hudData) && (
-            <div className="max-w-2xl mx-auto mt-16 space-y-6">
-              <div className="text-center mb-6">
-                <h2 className="text-2xl font-bold">Upload Data Files</h2>
-                <p className="text-sm text-muted-foreground mt-1">Both files are required to begin analysis</p>
-              </div>
+          {loading && !data && (
+            <div className="flex items-center justify-center gap-3 py-24 text-muted-foreground">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span className="text-sm">Loading monthly snapshot…</span>
+            </div>
+          )}
 
-              {/* Encompass Upload */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${loans ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground'}`}>{loans ? '✓' : '1'}</span>
-                  <h3 className="text-sm font-semibold">Encompass Neighborhood Watch Data</h3>
-                  <span className="text-xs text-risk-red font-medium">(Required)</span>
+          {error && !loading && (
+            <div className="max-w-2xl mx-auto mt-16 bg-risk-red-bg border border-risk-red/30 rounded-lg p-5">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-risk-red flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-semibold text-risk-red mb-1">Snapshot load failed</h3>
+                  <p className="text-xs text-foreground/80">{error}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Check that <code className="text-[11px] bg-muted px-1 rounded">public/data/snapshots/index.json</code> exists and contains at least one period.
+                  </p>
                 </div>
-                {loans ? (
-                  <div className="border-2 border-green-500/30 bg-green-50 dark:bg-green-950/20 rounded-lg p-4 text-center">
-                    <p className="text-sm text-green-600 dark:text-green-400 font-medium">✓ {loans.length.toLocaleString()} loans loaded</p>
-                  </div>
-                ) : (
-                  <FileUpload onDataLoaded={(parsedLoans) => {
-                    setLoans(parsedLoans);
-                  }} />
-                )}
-              </div>
-
-              {/* HUD Upload */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${hudData ? 'bg-green-500 text-white' : 'bg-primary text-primary-foreground'}`}>{hudData ? '✓' : '2'}</span>
-                  <h3 className="text-sm font-semibold">HUD Field Offices Report</h3>
-                  <span className="text-xs text-risk-red font-medium">(Required)</span>
-                </div>
-                {hudData ? (
-                  <div className="border-2 border-green-500/30 bg-green-50 dark:bg-green-950/20 rounded-lg p-4 text-center">
-                    <p className="text-sm text-green-600 dark:text-green-400 font-medium">✓ {hudFileName} — {hudData.length} offices loaded</p>
-                  </div>
-                ) : (
-                  <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary/50 transition-colors cursor-pointer">
-                    <input type="file" accept=".xlsx,.xls" className="hidden" id="hud-upload"
-                      onChange={e => { const f = e.target.files?.[0]; if (f) handleHUDLoaded(f); }} />
-                    <label htmlFor="hud-upload" className="cursor-pointer flex flex-col items-center gap-2">
-                      <Upload className="w-8 h-8 text-muted-foreground" />
-                      <p className="text-sm font-medium">Upload HUD Field Offices Excel</p>
-                      <p className="text-xs text-muted-foreground">HUD Neighborhood Watch — Field Offices report (.xlsx)</p>
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              <div className="text-center pt-2">
-                <button
-                  onClick={loadDemo}
-                  className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Database className="w-4 h-4" />
-                  Load demo data (9,400 synthetic loans)
-                </button>
               </div>
             </div>
           )}
 
-          {data && (
+          {data && snapshot && index && (
             <>
               {/* Confidentiality Notice */}
               <div className="bg-risk-red-bg border border-risk-red/30 rounded-lg px-4 py-3">
@@ -259,12 +231,13 @@ export default function Index() {
                   <span className="font-bold uppercase">Confidential:</span> This dashboard contains proprietary information, quality control findings, borrower-related nonpublic personal information, and internal risk assessments of American Financial Network, Inc. Access is restricted to authorized committee members and personnel with a legitimate business need to know. Unauthorized access, use, disclosure, distribution, or copying is strictly prohibited.
                 </p>
               </div>
-              {/* Upload replacement */}
-              <div className="flex items-center justify-between">
+
+              {/* Header */}
+              <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <p className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase">American Financial Network, Inc.</p>
                   <h2 className="text-lg font-bold">FHA Risk Monitor · HUD Compare Ratio Analytics</h2>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-xs text-muted-foreground">{data.totalLoans.toLocaleString()} loans analyzed</p>
                     {performancePeriod && (
                       <>
@@ -272,9 +245,19 @@ export default function Index() {
                         <p className="text-xs text-muted-foreground font-medium">{performancePeriod}</p>
                       </>
                     )}
+                    <span className="text-xs text-muted-foreground">·</span>
+                    <p className="text-[10px] text-muted-foreground">
+                      Snapshot generated {new Date(snapshot.snapshot_meta.generated_at).toLocaleString()}
+                    </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <MonthSelector
+                    periods={index.periods}
+                    selectedPeriod={selectedPeriod}
+                    onChange={handlePeriodChange}
+                    disabled={loading}
+                  />
                   <button
                     onClick={() => exportDashboardPDF(data, allActionItems, performancePeriod)}
                     className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
@@ -282,22 +265,15 @@ export default function Index() {
                     <FileDown className="w-3.5 h-3.5" />
                     Export PDF
                   </button>
-                  <label htmlFor="file-replace" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors">
-                    <Upload className="w-3.5 h-3.5" /> Replace Encompass
-                  </label>
-                  <input id="file-replace" type="file" accept=".xlsx,.xls" className="hidden" onChange={e => {
-                    const file = e.target.files?.[0];
-                    if (file) file.arrayBuffer().then(buf => handleEncompassLoaded(parseExcelFile(buf)));
-                  }} />
-                  <label htmlFor="hud-replace" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer transition-colors">
-                    <Upload className="w-3.5 h-3.5" /> {data.hasHUDData ? 'Replace HUD' : 'Add HUD Data'}
-                  </label>
-                  <input id="hud-replace" type="file" accept=".xlsx,.xls" className="hidden" onChange={e => {
-                    const file = e.target.files?.[0];
-                    if (file) handleHUDLoaded(file);
-                  }} />
                 </div>
               </div>
+
+              {loading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Loading {selectedPeriod}…
+                </div>
+              )}
 
               <div id="section-summary" className="space-y-4">
                 <SummaryCards data={data} />

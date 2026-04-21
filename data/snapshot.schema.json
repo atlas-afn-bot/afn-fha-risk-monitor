@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fha-monitor.afnai.com/schemas/snapshot.schema.json",
+  "title": "FHA Risk Monitor Monthly Snapshot",
+  "description": "One JSON document per monthly performance period. Mirrors the SQL DDL at db/migrations/001_initial_schema.sql. See src/types/snapshot.ts for the TypeScript definition and data/schema.md for the field-by-field description.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshot_meta",
+    "compare_ratios_total",
+    "compare_ratios_hoc",
+    "compare_ratios_hud_office",
+    "compare_ratios_branch",
+    "portfolio_slices",
+    "loan_officer_performance",
+    "risk_indicator_distribution",
+    "loans"
+  ],
+  "properties": {
+    "snapshot_meta": { "$ref": "#/$defs/SnapshotMeta" },
+    "compare_ratios_total": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CompareRatioTotal" }
+    },
+    "compare_ratios_hoc": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CompareRatioHOC" }
+    },
+    "compare_ratios_hud_office": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CompareRatioHudOffice" }
+    },
+    "compare_ratios_branch": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CompareRatioBranch" }
+    },
+    "portfolio_slices": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/PortfolioSlice" }
+    },
+    "loan_officer_performance": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/LoanOfficerPerformance" }
+    },
+    "risk_indicator_distribution": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/RiskIndicatorBucket" }
+    },
+    "loans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Loan" }
+    }
+  },
+  "$defs": {
+    "HocName": {
+      "type": "string",
+      "enum": ["Atlanta", "Denver", "Philadelphia", "Santa Ana"]
+    },
+    "ApprovalStatus": {
+      "type": ["string", "null"],
+      "enum": ["A", "T", null]
+    },
+    "Channel": {
+      "type": ["string", "null"],
+      "enum": ["Retail", "Wholesale", null]
+    },
+    "SnapshotMeta": {
+      "type": "object",
+      "required": [
+        "period", "label", "performance_period", "performance_period_label",
+        "generated_at", "generated_by", "source_files", "schema_version"
+      ],
+      "properties": {
+        "period": { "type": "string", "pattern": "^\\d{4}-\\d{2}$" },
+        "label": { "type": "string" },
+        "performance_period": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "performance_period_label": { "type": "string" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "generated_by": { "type": "string" },
+        "source_files": { "type": "array", "items": { "type": "string" } },
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "CompareRatioTotal": {
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": { "type": "string", "enum": ["total", "retail", "sponsor"] },
+        "compare_ratio": { "type": ["number", "null"] },
+        "mix_adjusted_sdq": { "type": ["number", "null"] },
+        "fha_benchmark_sdq": { "type": ["number", "null"] },
+        "supplemental_metric": { "type": ["number", "null"] },
+        "loans_count": { "type": ["integer", "null"] },
+        "delinquent_count": { "type": ["integer", "null"] }
+      }
+    },
+    "CompareRatioHOC": {
+      "type": "object",
+      "required": ["hoc_name"],
+      "properties": {
+        "hoc_name": { "$ref": "#/$defs/HocName" },
+        "compare_ratio": { "type": ["number", "null"] },
+        "retail_ratio": { "type": ["number", "null"] },
+        "sponsor_ratio": { "type": ["number", "null"] },
+        "mix_adjusted_sdq": { "type": ["number", "null"] },
+        "fha_benchmark_sdq": { "type": ["number", "null"] },
+        "supplemental_metric": { "type": ["number", "null"] },
+        "loans_count": { "type": ["integer", "null"] },
+        "delinquent_count": { "type": ["integer", "null"] }
+      }
+    },
+    "CompareRatioHudOffice": {
+      "type": "object",
+      "required": ["hud_office"],
+      "properties": {
+        "hud_office": { "type": "string" },
+        "hoc": { "oneOf": [{ "$ref": "#/$defs/HocName" }, { "type": "null" }] },
+        "retail_branches_count": { "type": ["integer", "null"] },
+        "sponsored_branches_count": { "type": ["integer", "null"] },
+        "compare_ratio": { "type": ["number", "null"] },
+        "retail_ratio": { "type": ["number", "null"] },
+        "sponsor_ratio": { "type": ["number", "null"] },
+        "loans_count": { "type": ["integer", "null"] },
+        "delinquent_count": { "type": ["integer", "null"] },
+        "retail_loans": { "type": ["integer", "null"] },
+        "retail_delinquent": { "type": ["integer", "null"] },
+        "sponsored_loans": { "type": ["integer", "null"] },
+        "sponsored_delinquent": { "type": ["integer", "null"] },
+        "hud_office_dq_pct": { "type": ["number", "null"] },
+        "area_retail_dq_pct": { "type": ["number", "null"] },
+        "area_sponsored_dq_pct": { "type": ["number", "null"] },
+        "mix_adjusted_sdq": { "type": ["number", "null"] },
+        "fha_benchmark_sdq": { "type": ["number", "null"] },
+        "supplemental_metric": { "type": ["number", "null"] }
+      }
+    },
+    "CompareRatioBranch": {
+      "type": "object",
+      "required": ["nmls_id"],
+      "properties": {
+        "nmls_id": { "type": "string" },
+        "branch_name": { "type": ["string", "null"] },
+        "hud_office": { "type": ["string", "null"] },
+        "approval_status": { "$ref": "#/$defs/ApprovalStatus" },
+        "loans_underwritten": { "type": ["integer", "null"] },
+        "delinquency_rate": { "type": ["number", "null"] },
+        "compare_ratio": { "type": ["number", "null"] }
+      }
+    },
+    "PortfolioSlice": {
+      "type": "object",
+      "required": ["dimension", "bucket", "bucket_order"],
+      "properties": {
+        "dimension": { "type": "string" },
+        "bucket": { "type": "string" },
+        "bucket_order": { "type": "integer" },
+        "combined_population": { "type": ["integer", "null"] },
+        "retail_population": { "type": ["integer", "null"] },
+        "wholesale_population": { "type": ["integer", "null"] },
+        "combined_delinquent": { "type": ["integer", "null"] },
+        "retail_delinquent": { "type": ["integer", "null"] },
+        "wholesale_delinquent": { "type": ["integer", "null"] },
+        "combined_pct": { "type": ["number", "null"] },
+        "retail_pct": { "type": ["number", "null"] },
+        "wholesale_pct": { "type": ["number", "null"] },
+        "baseline_combined": { "type": ["number", "null"] },
+        "baseline_retail": { "type": ["number", "null"] },
+        "baseline_wholesale": { "type": ["number", "null"] },
+        "baseline_comparison_combined": { "type": ["number", "null"] },
+        "baseline_comparison_retail": { "type": ["number", "null"] },
+        "baseline_comparison_wholesale": { "type": ["number", "null"] }
+      }
+    },
+    "LoanOfficerPerformance": {
+      "type": "object",
+      "required": ["lo_nmls_id"],
+      "properties": {
+        "lo_nmls_id": { "type": "string" },
+        "lo_name": { "type": ["string", "null"] },
+        "approval_status": { "$ref": "#/$defs/ApprovalStatus" },
+        "channel": { "$ref": "#/$defs/Channel" },
+        "funded_count": { "type": ["integer", "null"] },
+        "delinquent_count": { "type": ["integer", "null"] },
+        "delinquency_pct": { "type": ["number", "null"] },
+        "baseline_comparison": { "type": ["number", "null"] },
+        "sub_620_count": { "type": ["integer", "null"] },
+        "super_29_dti_count": { "type": ["integer", "null"] },
+        "super_50_dti_count": { "type": ["integer", "null"] },
+        "super_90_ltv_count": { "type": ["integer", "null"] },
+        "super_95_ltv_count": { "type": ["integer", "null"] },
+        "dpa_count": { "type": ["integer", "null"] },
+        "manufactured_count": { "type": ["integer", "null"] },
+        "variable_income_count": { "type": ["integer", "null"] },
+        "super_variable_income_count": { "type": ["integer", "null"] },
+        "non_owner_occupied_count": { "type": ["integer", "null"] },
+        "manual_uw_count": { "type": ["integer", "null"] },
+        "hud_deficiency_count": { "type": ["integer", "null"] },
+        "gift_grant_count": { "type": ["integer", "null"] }
+      }
+    },
+    "RiskIndicatorBucket": {
+      "type": "object",
+      "required": ["indicator_count"],
+      "properties": {
+        "indicator_count": { "type": "integer", "minimum": 0, "maximum": 13 },
+        "loans_count": { "type": ["integer", "null"] },
+        "delinquent_count": { "type": ["integer", "null"] },
+        "delinquency_pct": { "type": ["number", "null"] },
+        "baseline_comparison": { "type": ["number", "null"] }
+      }
+    },
+    "Loan": {
+      "type": "object",
+      "required": [
+        "loan_id", "has_sub_620", "has_super_29_dti", "has_super_50_dti",
+        "has_super_90_ltv", "has_super_95_ltv", "has_dpa",
+        "has_manufactured", "has_variable_income", "has_super_variable_income",
+        "has_non_owner_occupied", "has_manual_uw", "has_hud_deficiency",
+        "has_gift_grant", "risk_indicator_count",
+        "is_delinquent", "is_seriously_delinquent", "is_claim",
+        "is_boost", "fails_enhanced_guidelines", "program_type"
+      ],
+      "properties": {
+        "loan_id": { "type": "string" },
+        "fha_case_number": { "type": ["string", "null"] },
+        "loan_officer": { "type": ["string", "null"] },
+        "lo_nmls_id": { "type": ["string", "null"] },
+        "branch_nmls_id": { "type": ["string", "null"] },
+        "hud_office": { "type": ["string", "null"] },
+        "hoc": { "type": ["string", "null"] },
+        "channel": { "$ref": "#/$defs/Channel" },
+        "dpa_program": { "type": ["string", "null"] },
+        "dpa_name": { "type": ["string", "null"] },
+        "dpa_investor": { "type": ["string", "null"] },
+        "investor_name": { "type": ["string", "null"] },
+        "loan_purpose": { "type": ["string", "null"] },
+        "fico_score": { "type": ["integer", "null"] },
+        "front_dti": { "type": ["number", "null"] },
+        "back_dti": { "type": ["number", "null"] },
+        "ltv": { "type": ["number", "null"] },
+        "loan_amount": { "type": ["number", "null"] },
+        "source_of_funds": { "type": ["string", "null"] },
+        "employment_type": { "type": ["string", "null"] },
+        "aus": { "type": ["string", "null"] },
+        "units": { "type": ["integer", "null"] },
+        "property_type": { "type": ["string", "null"] },
+        "occupancy": { "type": ["string", "null"] },
+        "delinquent_status_code": { "type": ["string", "null"] },
+        "delinquent_status": { "type": ["string", "null"] },
+        "months_delinquent": { "type": ["integer", "null"] },
+        "oldest_unpaid_installment": { "type": ["string", "null"] },
+        "fha_ins_stat": { "type": ["string", "null"] },
+        "has_sub_620": { "type": "boolean" },
+        "has_super_29_dti": { "type": "boolean" },
+        "has_super_50_dti": { "type": "boolean" },
+        "has_super_90_ltv": { "type": "boolean" },
+        "has_super_95_ltv": { "type": "boolean" },
+        "has_dpa": { "type": "boolean" },
+        "has_manufactured": { "type": "boolean" },
+        "has_variable_income": { "type": "boolean" },
+        "has_super_variable_income": { "type": "boolean" },
+        "has_non_owner_occupied": { "type": "boolean" },
+        "has_manual_uw": { "type": "boolean" },
+        "has_hud_deficiency": { "type": "boolean" },
+        "has_gift_grant": { "type": "boolean" },
+        "risk_indicator_count": { "type": "integer", "minimum": 0, "maximum": 13 },
+        "is_delinquent": { "type": "boolean" },
+        "is_seriously_delinquent": { "type": "boolean" },
+        "is_claim": { "type": "boolean" },
+        "loan_program_raw": { "type": ["string", "null"] },
+        "ltv_group": { "type": ["string", "null"] },
+        "fthb": { "type": ["string", "null"] },
+        "dti_back_end_group": { "type": ["string", "null"] },
+        "payment_shock_group": { "type": ["string", "null"] },
+        "source_of_funds_group": { "type": ["string", "null"] },
+        "reserves_group": { "type": ["string", "null"] },
+        "gift_grant_group": { "type": ["string", "null"] },
+        "reserves_months": { "type": ["number", "null"] },
+        "gift_fund_amount": { "type": ["number", "null"] },
+        "payment_shock": { "type": ["number", "null"] },
+        "pay_shock_over_100": { "type": ["string", "null"] },
+        "is_boost": { "type": "boolean" },
+        "fails_enhanced_guidelines": { "type": "boolean" },
+        "hud_office_compare_ratio": { "type": ["number", "null"] },
+        "program_type": { "type": "string", "enum": ["DPA", "Standard"] }
+      }
+    }
+  }
+}

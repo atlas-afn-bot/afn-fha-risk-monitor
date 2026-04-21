@@ -1,0 +1,13 @@
+{
+  "periods": [
+    {
+      "period": "2026-02",
+      "label": "February 2026",
+      "performance_period": "2026-02-28",
+      "generated_at": "2026-04-21T20:49:56Z",
+      "file": "2026-02.json"
+    }
+  ],
+  "updated_at": "2026-04-21T20:49:57Z",
+  "schema_version": 1
+}

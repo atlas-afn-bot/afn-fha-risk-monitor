@@ -1,4 +1,85 @@
 import type { ParsedLoan, DashboardData, OfficeSummary, DPAProgramSummary, DPAInvestorSummary, ChannelSummary, FICOBucket, HUDOfficeCR, TrendAnalysis, TrendDimension } from './types';
+import type { Snapshot, Loan as SnapshotLoan, CompareRatioHudOffice } from '@/types/snapshot';
+
+/**
+ * Primary entry point for the dashboard — takes a parsed monthly snapshot
+ * (as loaded by `snapshotLoader.ts`) and returns the same `DashboardData`
+ * shape the existing components consume.
+ *
+ * Under the hood this maps the snapshot's `loans[]` + HUD office rows into
+ * the legacy `ParsedLoan[]` / `HUDOfficeCR[]` structures and runs the same
+ * aggregation pipeline the old Excel-upload flow used. Keeping the
+ * downstream shape stable means every chart / table component works
+ * without modification.
+ */
+export function buildDashboardFromSnapshot(snapshot: Snapshot): DashboardData {
+  const loans = snapshot.loans.map(snapshotLoanToParsed);
+  const hudData = snapshot.compare_ratios_hud_office.map(hudOfficeToCR);
+  return computeDashboard(loans, hudData);
+}
+
+/**
+ * Adapt a snapshot-shaped {@link SnapshotLoan} into the legacy
+ * {@link ParsedLoan} shape consumed by every computation below. The snapshot
+ * already carries all derived fields (risk flags, enhanced-guidelines check,
+ * etc.) — this function is a straight field-by-field rename / defaulting.
+ */
+function snapshotLoanToParsed(l: SnapshotLoan): ParsedLoan {
+  const channel: ParsedLoan['channelType'] =
+    l.channel === 'Retail' ? 'Retail'
+    : l.channel === 'Wholesale' ? 'Wholesale'
+    : 'Unknown';
+  return {
+    DQ: l.is_delinquent ? 'Yes' : 'No',
+    HUDOffice: l.hud_office ?? '',
+    HUDOfficeCR: l.hud_office_compare_ratio ?? 0,
+    Channel: l.channel ?? '',
+    LoanProgram: l.loan_program_raw ?? '',
+    DPAName: l.dpa_name ?? '',
+    DPAProgram: l.dpa_program ?? '',
+    DPAInvestor: l.dpa_investor ?? '',
+    FICO: l.fico_score ?? 0,
+    Units: l.units != null ? String(l.units) : '',
+    AUSType: l.aus ?? '',
+    ReserveMonths: l.reserves_months ?? 0,
+    GiftFunds: l.gift_fund_amount != null ? String(l.gift_fund_amount) : '0',
+    PaymentShock: l.payment_shock ?? 0,
+    LTVGroup: l.ltv_group ?? 'Unknown',
+    FTHB: l.fthb ?? 'Unknown',
+    DTIBackEndGroup: l.dti_back_end_group ?? 'Unknown',
+    PaymentShockGroup: l.payment_shock_group ?? 'Unknown',
+    SourceOfFundsGroup: l.source_of_funds_group ?? 'Unknown',
+    ReservesGroup: l.reserves_group ?? 'Unknown',
+    RiskIndicatorCount: l.risk_indicator_count,
+    GiftGrantGroup: l.gift_grant_group ?? 'Unknown',
+
+    isDelinquent: l.is_delinquent,
+    programType: l.program_type,
+    channelType: channel,
+    isDPA: l.has_dpa,
+    isBoost: l.is_boost,
+    failsEnhancedGuidelines: l.fails_enhanced_guidelines,
+  };
+}
+
+function hudOfficeToCR(h: CompareRatioHudOffice): HUDOfficeCR {
+  const name = (h.hud_office ?? '').toUpperCase();
+  return {
+    name,
+    totalCR: h.compare_ratio ?? 0,
+    retailCR: h.retail_ratio ?? 0,
+    wsCR: h.sponsor_ratio ?? 0,
+    totalLoansUW: h.loans_count ?? 0,
+    totalDLQ: h.delinquent_count ?? 0,
+    retailLoans: h.retail_loans ?? 0,
+    retailDLQ: h.retail_delinquent ?? 0,
+    sponsoredLoans: h.sponsored_loans ?? 0,
+    sponsoredDLQ: h.sponsored_delinquent ?? 0,
+    areaRetailDQPct: h.area_retail_dq_pct ?? 0,
+    areaSponsoredDQPct: h.area_sponsored_dq_pct ?? 0,
+    hudOfficeDQPct: h.hud_office_dq_pct ?? 0,
+  };
+}
 
 export function computeDashboard(loans: ParsedLoan[], hudData?: HUDOfficeCR[]): DashboardData {
   const totalLoans = loans.length;

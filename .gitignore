@@ -2,3 +2,17 @@ node_modules/
 dist/
 .env
 *.local
+
+# Raw source Excel files — customer data, never commit
+# Snapshots (JSON) under public/data/snapshots/ ARE committed so the deployed
+# dashboard has data; the raw xlsx exports that feed the build script are not.
+data/source/**/*.xlsx
+data/source/**/*.xlsb
+data/source/**/*.xls
+data/source/**/*.csv
+
+# Python build-time artifacts
+__pycache__/
+*.pyc
+.venv/
+venv/
