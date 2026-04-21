@@ -493,6 +493,18 @@ def build_loans(enc_path: Path, nw2_path: Path,
         "Seriously Delinquent", "Oldest Unpaid Installment Due Date",
         "Number of Months Delinquent", "Delinquent Status", "Delinquent Reason",
         "Loan Officer NMLS ID", "Indem",
+        # NW Data extension fields (sponsor / TPO, gift letter, census,
+        # underwriter review, indemnification). Merged onto every loan
+        # so downstream rollups can be computed from the canonical loan
+        # array.
+        "Sponsor ID", "Sponsored Originator Name",
+        "Sponsored Originator EIN ID (last 4 digits)",
+        "Sponsored Originator NMLS ID",
+        "Gift Ltr Amt", "Gift Ltr Source",
+        "Census Tract", "Underserved Indicator",
+        "Unwtr Rvw Appr", "Unwtr Mort Cr Rtng",
+        "Delinquent Status Date",
+        "Payments before First 90 Day Delinquent Reported",
     ] if c in nw2.columns]].copy()
     nw2_small = nw2_small.rename(columns={"Case Number": "Case #"})
     merged = enc.merge(nw2_small, how="left", on="Case #", suffixes=("", "_nw"))
@@ -650,6 +662,26 @@ def build_loans(enc_path: Path, nw2_path: Path,
             "fails_enhanced_guidelines": bool(fails_eg),
             "hud_office_compare_ratio": _clean_num(row.get("HUD Office Compare Ratio")),
             "program_type": "DPA" if is_dpa else "Standard",
+
+            # ── NW Data extension fields (additive; may be None when the
+            # Encompass row didn't match a NW Data 2 row on Case #) ──
+            "underwriter_name": _clean_str(row.get("Underwriter Name")),
+            "underwriter_id": _clean_str(row.get("Unwtr ID")),
+            "underwriter_review_approval": _clean_str(row.get("Unwtr Rvw Appr")),
+            "underwriter_mortgage_credit_rating": _clean_str(row.get("Unwtr Mort Cr Rtng")),
+            "sponsor_id": _clean_str(row.get("Sponsor ID")),
+            "sponsor_originator_name": _clean_str(row.get("Sponsored Originator Name")),
+            "sponsor_originator_ein_last4": _clean_str(row.get("Sponsored Originator EIN ID (last 4 digits)")),
+            "sponsor_originator_nmls_id": _clean_str(row.get("Sponsored Originator NMLS ID")),
+            "gift_letter_amount": _clean_num(row.get("Gift Ltr Amt")),
+            "gift_letter_source": _clean_str(row.get("Gift Ltr Source")),
+            "census_tract": _clean_str(row.get("Census Tract")),
+            "underserved_indicator": _clean_str(row.get("Underserved Indicator")),
+            "delinquent_reason_code": _clean_str(row.get("Delinquent Reason")),
+            "payments_before_first_90_day_delinquent": _clean_int(
+                row.get("Payments before First 90 Day Delinquent Reported")
+            ),
+            "indemnification_flag": _clean_str(row.get("Indem")),
         })
 
     return loans
@@ -877,6 +909,190 @@ def build_risk_indicator_distribution(loans: List[dict]) -> List[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NW Data extension rollups
+# ─────────────────────────────────────────────────────────────────────────────
+
+# HUD Neighborhood Watch "Delinquent Reason" code → description.
+# Source: HUD Handbook 4000.1 / NW Report legend. Best-effort decoding of
+# the code values observed in the NW Data 2 export. Unknown codes fall
+# through to "Reason {code}".
+DELINQUENT_REASON_CODES: Dict[str, str] = {
+    "1":  "Death of principal mortgagor",
+    "2":  "Illness of principal mortgagor",
+    "3":  "Illness of mortgagor's family member",
+    "4":  "Death of mortgagor's family member",
+    "5":  "Marital difficulties",
+    "6":  "Curtailment of income",
+    "7":  "Excessive obligations",
+    "8":  "Abandonment of property",
+    "9":  "Distant employment transfer",
+    "10": "Neighborhood problem",
+    "11": "Property problem",
+    "12": "Inability to sell property",
+    "13": "Inability to rent property",
+    "14": "Military service",
+    "15": "Other",
+    "16": "Unemployment",
+    "17": "Business failure",
+    "18": "Casualty loss",
+    "19": "Energy / environment costs",
+    "20": "Servicing problems",
+    "21": "Payment adjustment",
+    "22": "Payment dispute",
+    "23": "Transfer of ownership",
+    "24": "Fraud",
+    "25": "Incarceration",
+}
+
+
+def _reason_description(code: Optional[str]) -> str:
+    if not code:
+        return "Not reported"
+    s = str(code).strip()
+    try:
+        s = str(int(float(s)))
+    except ValueError:
+        pass
+    return DELINQUENT_REASON_CODES.get(s, f"Reason {s}")
+
+
+def build_underwriter_rollup(loans: List[dict]) -> List[dict]:
+    """Group loans by underwriter, with SDQ count + credit-rating breakdown.
+
+    NW Data 2 only populates `underwriter_name` for the SDQ population, so
+    this rollup naturally limits itself to SDQ-touched underwriters. We skip
+    the `Unassigned` bucket (loans that were never in NW Data 2).
+    """
+    by_uw: Dict[Tuple[str, str], List[dict]] = {}
+    for l in loans:
+        name = l.get("underwriter_name")
+        if not name:
+            continue
+        uid = l.get("underwriter_id") or ""
+        by_uw.setdefault((name, uid), []).append(l)
+
+    total = len(loans)
+    total_sdq = sum(1 for l in loans if l.get("is_seriously_delinquent"))
+    base = _dq_pct(total_sdq, total) or 0.0
+
+    out: List[dict] = []
+    for (name, uid), group in by_uw.items():
+        loan_count = len(group)
+        sdq_count = sum(1 for l in group if l.get("is_seriously_delinquent"))
+        sdq_pct = _dq_pct(sdq_count, loan_count)
+        compare_ratio = round((sdq_pct / base) * 100, 2) if sdq_pct is not None and base > 0 else None
+        rating_counts: Dict[str, int] = {}
+        for l in group:
+            rating = (l.get("underwriter_mortgage_credit_rating") or "").strip() or "Unrated"
+            rating_counts[rating] = rating_counts.get(rating, 0) + 1
+        breakdown = [
+            {"rating": k, "count": v}
+            for k, v in sorted(rating_counts.items(), key=lambda kv: -kv[1])
+        ]
+        out.append({
+            "underwriter_name": name.strip(),
+            "underwriter_id": uid.strip(),
+            "loan_count": loan_count,
+            "sdq_count": sdq_count,
+            "sdq_pct": sdq_pct,
+            "compare_ratio": compare_ratio,
+            "mortgage_credit_rating_breakdown": breakdown,
+        })
+    out.sort(key=lambda r: (-r["loan_count"], r["underwriter_name"]))
+    return out
+
+
+def build_delinquency_reason_rollup(loans: List[dict]) -> List[dict]:
+    """Group SDQ loans by HUD's Delinquent Reason code."""
+    sdq = [l for l in loans if l.get("is_seriously_delinquent")]
+    total_sdq = len(sdq)
+    counts: Dict[str, int] = {}
+    for l in sdq:
+        code = (l.get("delinquent_reason_code") or "").strip() or "Not reported"
+        try:
+            code = str(int(float(code)))
+        except ValueError:
+            pass
+        counts[code] = counts.get(code, 0) + 1
+
+    out: List[dict] = []
+    for code, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        pct = round((n / total_sdq) * 100, 2) if total_sdq > 0 else 0.0
+        out.append({
+            "reason_code": code,
+            "reason_description": _reason_description(code),
+            "loan_count": n,
+            "pct_of_sdq": pct,
+        })
+    return out
+
+
+def build_indemnification_loans(loans: List[dict]) -> List[dict]:
+    """List loans flagged with an indemnification on the NW export."""
+    out: List[dict] = []
+    for l in loans:
+        flag = (l.get("indemnification_flag") or "").strip()
+        if not flag or flag.upper() == "N":
+            continue
+        out.append({
+            "loan_id": l.get("loan_id"),
+            "fha_case_number": l.get("fha_case_number"),
+            "lo_name": l.get("loan_officer"),
+            "indemnification_type": flag,
+            "sdq_status": "SDQ" if l.get("is_seriously_delinquent") else "Current",
+            "delinquent_status_code": l.get("delinquent_status_code"),
+            "months_delinquent": l.get("months_delinquent"),
+            "hud_office": l.get("hud_office"),
+            "channel": l.get("channel"),
+        })
+    out.sort(key=lambda r: (r.get("loan_id") or ""))
+    return out
+
+
+def build_sponsor_tpo_detail(loans: List[dict]) -> List[dict]:
+    """Per-TPO / sponsored-originator rollup from NW Data sponsor columns.
+
+    NW Data 2 only populates the sponsor columns for the SDQ population, so
+    this view is by construction an SDQ-by-TPO breakdown. The compare_ratio
+    field is included for symmetry with the underwriter rollup but should
+    be interpreted relative to the firm-wide SDQ rate.
+    """
+    by_tpo: Dict[Tuple[str, str], List[dict]] = {}
+    for l in loans:
+        name = l.get("sponsor_originator_name")
+        if not name:
+            continue
+        nmls = l.get("sponsor_originator_nmls_id") or ""
+        by_tpo.setdefault((name.strip(), str(nmls).strip()), []).append(l)
+
+    total = sum(len(g) for g in by_tpo.values())
+    total_sdq = sum(
+        1 for g in by_tpo.values() for l in g if l.get("is_seriously_delinquent")
+    )
+    base = _dq_pct(total_sdq, total) or 0.0
+
+    out: List[dict] = []
+    for (name, nmls), group in by_tpo.items():
+        loan_count = len(group)
+        sdq_count = sum(1 for l in group if l.get("is_seriously_delinquent"))
+        sdq_pct = _dq_pct(sdq_count, loan_count)
+        compare_ratio = round((sdq_pct / base) * 100, 2) if sdq_pct is not None and base > 0 else None
+        sample = group[0]
+        out.append({
+            "sponsor_originator_name": name,
+            "sponsor_originator_nmls_id": nmls or None,
+            "sponsor_originator_ein_last4": sample.get("sponsor_originator_ein_last4"),
+            "sponsor_id": sample.get("sponsor_id"),
+            "loan_count": loan_count,
+            "sdq_count": sdq_count,
+            "sdq_pct": sdq_pct,
+            "compare_ratio": compare_ratio,
+        })
+    out.sort(key=lambda r: (-r["loan_count"], r["sponsor_originator_name"]))
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -961,6 +1177,22 @@ def main() -> int:
     print("Computing risk_indicator_distribution…")
     risk_dist = build_risk_indicator_distribution(loans)
 
+    print("Computing underwriter_rollup…")
+    underwriter_rollup = build_underwriter_rollup(loans)
+    print(f"  {len(underwriter_rollup)} underwriters")
+
+    print("Computing delinquency_reason_rollup…")
+    delinquency_reason_rollup = build_delinquency_reason_rollup(loans)
+    print(f"  {len(delinquency_reason_rollup)} reason buckets")
+
+    print("Computing indemnification_loans…")
+    indemnification_loans = build_indemnification_loans(loans)
+    print(f"  {len(indemnification_loans)} indemnified loans")
+
+    print("Computing sponsor_tpo_detail…")
+    sponsor_tpo_detail = build_sponsor_tpo_detail(loans)
+    print(f"  {len(sponsor_tpo_detail)} sponsored originators")
+
     # ── Compose ──
     snapshot = OrderedDict()
     snapshot["snapshot_meta"] = {
@@ -984,6 +1216,10 @@ def main() -> int:
     snapshot["portfolio_slices"] = slices
     snapshot["loan_officer_performance"] = lo_perf
     snapshot["risk_indicator_distribution"] = risk_dist
+    snapshot["underwriter_rollup"] = underwriter_rollup
+    snapshot["delinquency_reason_rollup"] = delinquency_reason_rollup
+    snapshot["indemnification_loans"] = indemnification_loans
+    snapshot["sponsor_tpo_detail"] = sponsor_tpo_detail
     snapshot["loans"] = loans
 
     # ── Write ──

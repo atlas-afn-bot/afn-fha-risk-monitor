@@ -15,7 +15,15 @@ import type { Snapshot, Loan as SnapshotLoan, CompareRatioHudOffice } from '@/ty
 export function buildDashboardFromSnapshot(snapshot: Snapshot): DashboardData {
   const loans = snapshot.loans.map(snapshotLoanToParsed);
   const hudData = snapshot.compare_ratios_hud_office.map(hudOfficeToCR);
-  return computeDashboard(loans, hudData);
+  const dashboard = computeDashboard(loans, hudData);
+  // Forward NW Data extension rollups straight through. They're optional
+  // so older snapshots without these arrays still produce a valid
+  // DashboardData (the new tabs just render an empty state).
+  dashboard.underwriterRollup = snapshot.underwriter_rollup;
+  dashboard.delinquencyReasonRollup = snapshot.delinquency_reason_rollup;
+  dashboard.indemnificationLoans = snapshot.indemnification_loans;
+  dashboard.sponsorTPODetail = snapshot.sponsor_tpo_detail;
+  return dashboard;
 }
 
 /**
