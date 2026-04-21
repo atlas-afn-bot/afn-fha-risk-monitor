@@ -1,15 +1,14 @@
 import type { DashboardData } from '@/lib/types';
+import type { Snapshot } from '@/types/snapshot';
 import { FileWarning, TrendingDown, PieChart, AlertTriangle } from 'lucide-react';
+import CompareRatioCard from './CompareRatioCard';
 
-interface Props { data: DashboardData }
-
-function crColor(val: number) {
-  if (val > 200) return 'risk-badge-red';
-  if (val >= 150) return 'risk-badge-yellow';
-  return 'risk-badge-green';
+interface Props {
+  data: DashboardData;
+  snapshot: Snapshot;
 }
 
-export default function SummaryCards({ data }: Props) {
+export default function SummaryCards({ data, snapshot }: Props) {
   const dqColor = data.overallDQRate > 7 ? 'risk-badge-red' : data.overallDQRate >= 5 ? 'risk-badge-yellow' : 'risk-badge-green';
   const dpaColor = data.dpaPortfolioConc > 50 ? 'risk-badge-red' : data.dpaPortfolioConc > 40 ? 'risk-badge-yellow' : 'risk-badge-green';
 
@@ -21,7 +20,8 @@ export default function SummaryCards({ data }: Props) {
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <CompareRatioCard snapshot={snapshot} />
       {cards.map(c => (
         <div key={c.label} className="bg-card rounded-lg border border-border p-5 flex items-start gap-4">
           <div className={`p-2.5 rounded-lg ${c.badge === 'risk-badge-red' ? 'bg-risk-red-bg' : c.badge === 'risk-badge-yellow' ? 'bg-risk-yellow-bg' : c.badge === 'risk-badge-green' ? 'bg-risk-green-bg' : 'bg-risk-blue-bg'}`}>

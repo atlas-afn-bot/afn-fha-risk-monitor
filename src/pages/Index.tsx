@@ -17,7 +17,6 @@ import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import MonthSelector from '@/components/MonthSelector';
-import CompareRatioHeader from '@/components/CompareRatioHeader';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
   LayoutDashboard, TrendingUp, AlertTriangle, Shield, PieChart,
@@ -274,10 +273,8 @@ export default function Index() {
                 </div>
               )}
 
-              <CompareRatioHeader snapshot={snapshot} />
-
               <div id="section-summary" className="space-y-4">
-                <SummaryCards data={data} />
+                <SummaryCards data={data} snapshot={snapshot} />
                 <ExecutiveSummary data={data} />
               </div>
 
