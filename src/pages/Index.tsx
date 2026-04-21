@@ -16,6 +16,7 @@ import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
+import AIInsights from '@/components/AIInsights';
 import MonthSelector from '@/components/MonthSelector';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
@@ -280,6 +281,10 @@ export default function Index() {
 
               <div id="section-trend">
                 <TrendChart history={hudHistory} />
+              </div>
+
+              <div id="section-ai-insights">
+                <AIInsights />
               </div>
 
               <div id="section-termination">
