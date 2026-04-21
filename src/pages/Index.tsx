@@ -16,7 +16,6 @@ import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
 import HUDConcentration from '@/components/HUDConcentration';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
-import ActionItems from '@/components/ActionItems';
 import MonthSelector from '@/components/MonthSelector';
 import CompareRatioHeader from '@/components/CompareRatioHeader';
 import { exportDashboardPDF } from '@/lib/exportPDF';
@@ -103,7 +102,6 @@ export default function Index() {
   const [error, setError] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(false);
   const [activeSection, setActiveSection] = useState('summary');
-  const [allActionItems, setAllActionItems] = useState<string[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<string>('');
 
   // Bootstrap: load the index + latest snapshot on cold start.
@@ -260,7 +258,7 @@ export default function Index() {
                     disabled={loading}
                   />
                   <button
-                    onClick={() => exportDashboardPDF(data, allActionItems, performancePeriod)}
+                    onClick={() => exportDashboardPDF(data, performancePeriod)}
                     className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                   >
                     <FileDown className="w-3.5 h-3.5" />
@@ -281,7 +279,6 @@ export default function Index() {
               <div id="section-summary" className="space-y-4">
                 <SummaryCards data={data} />
                 <ExecutiveSummary data={data} />
-                <ActionItems data={data} onItemsChanged={setAllActionItems} />
               </div>
 
               <div id="section-trend">
