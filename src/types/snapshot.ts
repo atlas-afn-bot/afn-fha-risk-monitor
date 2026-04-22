@@ -263,7 +263,91 @@ export interface Loan {
   hud_office_compare_ratio: number | null;
   /** Convenience: loan_program_type bucket ("DPA" | "Standard"). */
   program_type: 'DPA' | 'Standard';
+
+  // ─── NW Data extension fields (additive; populated only for the SDQ
+  //     population that NW Data 2 reports on; absent on Encompass-only loans)
+
+  /** HUD Underwriter Name from NW Data 2. */
+  underwriter_name?: string | null;
+  /** HUD Underwriter ID from NW Data 2. */
+  underwriter_id?: string | null;
+  /** HUD Underwriter Review Approval indicator (raw). */
+  underwriter_review_approval?: string | null;
+  /** HUD Underwriter Mortgage Credit Rating (raw). */
+  underwriter_mortgage_credit_rating?: string | null;
+  /** Sponsor ID column from NW Data 2 (10-digit numeric). */
+  sponsor_id?: string | null;
+  /** Sponsored Originator (TPO) name. */
+  sponsor_originator_name?: string | null;
+  /** Sponsored Originator EIN, last 4 digits. */
+  sponsor_originator_ein_last4?: string | null;
+  /** Sponsored Originator NMLS ID. */
+  sponsor_originator_nmls_id?: string | null;
+  /** Gift Letter dollar amount from NW Data 2. */
+  gift_letter_amount?: number | null;
+  /** Gift Letter source. */
+  gift_letter_source?: string | null;
+  /** Census Tract code (string — may have leading zeros). */
+  census_tract?: string | null;
+  /** Underserved-area indicator (Y/N). */
+  underserved_indicator?: string | null;
+  /** HUD Delinquent Reason code (raw, e.g. "6", "16"). */
+  delinquent_reason_code?: string | null;
+  /** Payments made before first 90-day delinquency reported. */
+  payments_before_first_90_day_delinquent?: number | null;
+  /** Indemnification flag from NW Data 2 (Y, P, etc.). */
+  indemnification_flag?: string | null;
 }
+
+// ─── NW Data extension rollups ────────────────────────────────────────
+
+/** Single underwriter's rollup with SDQ counts + credit-rating breakdown. */
+export interface UnderwriterRating {
+  rating: string;
+  count: number;
+}
+
+export interface UnderwriterRollupRow {
+  underwriter_name: string;
+  underwriter_id: string;
+  loan_count: number;
+  sdq_count: number;
+  sdq_pct: number | null;
+  compare_ratio: number | null;
+  mortgage_credit_rating_breakdown: UnderwriterRating[];
+}
+
+/** Distribution of SDQ loans across HUD's official Delinquent Reason codes. */
+export interface DelinquencyReasonRollupRow {
+  reason_code: string;
+  reason_description: string;
+  loan_count: number;
+  pct_of_sdq: number;
+}
+
+/** A single loan flagged with an indemnification on the NW Data 2 export. */
+export interface IndemnificationLoan {
+  loan_id: string;
+  fha_case_number: string | null;
+  lo_name: string | null;
+  indemnification_type: string;
+  sdq_status: 'SDQ' | 'Current';
+  delinquent_status_code: string | null;
+  months_delinquent: number | null;
+  hud_office: string | null;
+  channel: 'Retail' | 'Wholesale' | null;
+}
+
+/** Per-sponsored-originator (TPO) rollup from NW Data 2 sponsor columns. */
+export interface SponsorTPODetailRow {
+  sponsor_originator_name: string;
+  sponsor_originator_nmls_id: string | null;
+  sponsor_originator_ein_last4: string | null;
+  sponsor_id: string | null;
+  loan_count: number;
+  sdq_count: number;
+  sdq_pct: number | null;
+  compare_ratio: number | null;
 
 // ─── Root document ───────────────────────────────────────────────────────────
 
@@ -276,6 +360,14 @@ export interface Snapshot {
   portfolio_slices: PortfolioSlice[];
   loan_officer_performance: LoanOfficerPerformance[];
   risk_indicator_distribution: RiskIndicatorBucket[];
+  /** NW Data extension — underwriter-level SDQ + credit-rating rollup. */
+  underwriter_rollup?: UnderwriterRollupRow[];
+  /** NW Data extension — SDQ distribution by HUD Delinquent Reason code. */
+  delinquency_reason_rollup?: DelinquencyReasonRollupRow[];
+  /** NW Data extension — loans carrying an Indemnification flag. */
+  indemnification_loans?: IndemnificationLoan[];
+  /** NW Data extension — per-sponsored-originator (TPO) detail rollup. */
+  sponsor_tpo_detail?: SponsorTPODetailRow[];
   loans: Loan[];
 }
 
