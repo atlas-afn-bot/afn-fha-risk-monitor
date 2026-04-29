@@ -17,6 +17,7 @@ import ChannelAnalysis from '@/components/ChannelAnalysis';
 import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
+import TabSummary from '@/components/TabSummary';
 import TerminationRiskCards from '@/components/TerminationRiskCards';
 import AIInsights from '@/components/AIInsights';
 import MonthSelector from '@/components/MonthSelector';
@@ -37,7 +38,7 @@ type TabId = 'overview' | 'hud-offices' | 'hoc' | 'branches-hud' | 'deep-dive' |
 
 const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
   { id: 'overview',     emoji: '📊', label: 'Overview' },
-  { id: 'hud-offices',  emoji: '📋', label: 'FHA Risk Factors' },
+  { id: 'hud-offices',  emoji: '📋', label: 'HUD Office Analysis' },
   { id: 'hoc',          emoji: '🌎', label: 'HOC Analysis' },
   { id: 'branches-hud', emoji: '🏬', label: 'Branch Compare Ratios' },
   { id: 'deep-dive',    emoji: '👥', label: 'Loan Data Deep Dive' },
@@ -370,6 +371,7 @@ export default function Index() {
                 <TabsContent value="hud-offices">
                   {visited.has('hud-offices') && (
                     <div className="space-y-6">
+                      <TabSummary tabId="hud-offices" snapshot={snapshot} data={data} />
                       <div className="bg-card rounded-lg border border-border p-5">
                         <TerminationRiskCards offices={data.offices} />
                       </div>
@@ -388,36 +390,50 @@ export default function Index() {
 
                 {/* HOC Analysis */}
                 <TabsContent value="hoc">
-                  {visited.has('hoc') && <HOCAnalysis snapshot={snapshot} />}
+                  {visited.has('hoc') && (
+                    <div className="space-y-6">
+                      <TabSummary tabId="hoc" snapshot={snapshot} data={data} />
+                      <HOCAnalysis snapshot={snapshot} />
+                    </div>
+                  )}
                 </TabsContent>
 
                 {/* Branch Compare Ratios */}
                 <TabsContent value="branches-hud">
                   {visited.has('branches-hud') && (
-                    <BranchCompareRatios
-                      snapshot={snapshot}
-                      state={branchTabState}
-                      onState={setBranchTabState}
-                    />
+                    <div className="space-y-6">
+                      <TabSummary tabId="branches-hud" snapshot={snapshot} data={data} />
+                      <BranchCompareRatios
+                        snapshot={snapshot}
+                        state={branchTabState}
+                        onState={setBranchTabState}
+                      />
+                    </div>
                   )}
                 </TabsContent>
 
                 {/* Deep Dive */}
                 <TabsContent value="deep-dive">
                   {visited.has('deep-dive') && (
-                    <DeepDive
-                      snapshot={snapshot}
-                      data={data}
-                      subTab={deepDiveSub}
-                      onSubTabChange={handleSubChange}
-                    />
+                    <div className="space-y-6">
+                      <TabSummary tabId="deep-dive" snapshot={snapshot} data={data} />
+                      <DeepDive
+                        snapshot={snapshot}
+                        data={data}
+                        subTab={deepDiveSub}
+                        onSubTabChange={handleSubChange}
+                      />
+                    </div>
                   )}
                 </TabsContent>
 
                 {/* Delinquencies */}
                 <TabsContent value="delinquencies">
                   {visited.has('delinquencies') && (
-                    <Delinquencies snapshot={snapshot} data={data} />
+                    <div className="space-y-6">
+                      <TabSummary tabId="delinquencies" snapshot={snapshot} data={data} />
+                      <Delinquencies snapshot={snapshot} data={data} />
+                    </div>
                   )}
                 </TabsContent>
               </Tabs>
