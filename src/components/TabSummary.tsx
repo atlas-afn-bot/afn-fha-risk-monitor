@@ -135,18 +135,33 @@ function computeBranches(data: DashboardData, snapshot: Snapshot): TabSummaryRes
   const sorted = [...withCR].sort((a, b) => (b.compare_ratio ?? 0) - (a.compare_ratio ?? 0));
   const worst = sorted[0] ?? null;
 
+  // Encompass branch-level DQ rate
+  const branchMap = new Map<string, { total: number; dq: number; dpa: number }>();
+  for (const l of snapshot.loans) {
+    const bid = l.branch_nmls_id;
+    if (!bid) continue;
+    if (!branchMap.has(bid)) branchMap.set(bid, { total: 0, dq: 0, dpa: 0 });
+    const e = branchMap.get(bid)!;
+    e.total++;
+    if (l.is_delinquent) e.dq++;
+    if (l.has_dpa) e.dpa++;
+  }
+  const totalLoans = snapshot.loans.length;
+  const totalDPA = [...branchMap.values()].reduce((s, b) => s + b.dpa, 0);
+  const overallDPA = totalLoans > 0 ? (totalDPA / totalLoans * 100) : 0;
+
   return {
     kpis: [
       {
-        label: 'Branches > 200%',
+        label: 'HUD Branches > 200%',
         value: String(above200.length),
-        sub: `of ${withCR.length} active branches`,
+        sub: `of ${withCR.length} active · ${branchMap.size} AFN branches`,
         color: above200.length > 0 ? 'red' : 'green',
       },
       {
-        label: 'Branches > 150%',
+        label: 'HUD Branches > 150%',
         value: String(above150.length),
-        sub: 'elevated risk',
+        sub: `elevated risk · DPA at ${overallDPA.toFixed(0)}%`,
         color: above150.length > 5 ? 'yellow' : 'neutral',
       },
       {
@@ -156,9 +171,7 @@ function computeBranches(data: DashboardData, snapshot: Snapshot): TabSummaryRes
         color: (worst?.compare_ratio ?? 0) > 200 ? 'red' : (worst?.compare_ratio ?? 0) > 150 ? 'yellow' : 'neutral',
       },
     ],
-    insight: `${above200.length} branch${above200.length !== 1 ? 'es' : ''} exceed 200% compare ratio and ${above150.length} exceed 150%.${
-      worst ? ` Worst performer: ${worst.branch_name ?? worst.nmls_id} at ${(worst.compare_ratio ?? 0).toFixed(0)}%.` : ''
-    }`,
+    insight: `${above200.length} HUD branch${above200.length !== 1 ? 'es' : ''} exceed 200% compare ratio and ${above150.length} exceed 150%. ${branchMap.size} AFN branches in Encompass data with ${overallDPA.toFixed(1)}% DPA concentration.${worst ? ` Worst HUD branch: ${worst.branch_name ?? worst.nmls_id} at ${(worst.compare_ratio ?? 0).toFixed(0)}%.` : ''}`,
   };
 }
 
