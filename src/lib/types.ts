@@ -167,6 +167,13 @@ export interface DashboardData {
   programComposition: { standard: number; dpa: number; standardDQ: number; dpaDQ: number };
   hasHUDData: boolean;
   trendAnalysis: TrendAnalysis;
+  /** NW Data extension — forwarded straight from the snapshot for the
+   *  Deep Dive / Delinquencies tabs. Optional so older snapshots still
+   *  load cleanly. */
+  underwriterRollup?: import('@/types/snapshot').UnderwriterRollupRow[];
+  delinquencyReasonRollup?: import('@/types/snapshot').DelinquencyReasonRollupRow[];
+  indemnificationLoans?: import('@/types/snapshot').IndemnificationLoan[];
+  sponsorTPODetail?: import('@/types/snapshot').SponsorTPODetailRow[];
 }
 
 
