@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
-import { Users, GraduationCap, Handshake, Building } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Users, GraduationCap, Handshake, Building, ChevronUp, ChevronDown } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import type { Snapshot } from '@/types/snapshot';
+import type { Snapshot, Loan } from '@/types/snapshot';
 import type { DashboardData } from '@/lib/types';
 
 export type DeepDiveSubTab = 'lo' | 'uw' | 'tpo' | 'branch';
@@ -16,16 +16,85 @@ interface Props {
 const SUB_TABS: Array<{ id: DeepDiveSubTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'lo', label: 'Loan Officers', icon: Users },
   { id: 'uw', label: 'Underwriters', icon: GraduationCap },
-  { id: 'tpo', label: 'TPO / Sponsor', icon: Handshake },
+  { id: 'tpo', label: 'TPO / Broker', icon: Handshake },
   { id: 'branch', label: 'Branches (AFN)', icon: Building },
 ];
 
-function badgeClass(val: number | null | undefined): string {
-  if (val === null || val === undefined) return 'risk-badge-blue';
-  if (val > 200) return 'risk-badge-red';
-  if (val >= 150) return 'risk-badge-yellow';
-  return 'risk-badge-green';
+// ─── Shared helpers ──────────────────────────────────────────────────────────
+
+function pct(n: number, d: number): number | null {
+  return d > 0 ? Math.round((n / d) * 10000) / 100 : null;
 }
+
+function fmt(v: number | null | undefined, suffix = '%'): string {
+  if (v == null) return '—';
+  return `${v.toFixed(2)}${suffix}`;
+}
+
+function avg(nums: (number | null | undefined)[]): number | null {
+  const valid = nums.filter((n): n is number => n != null && n !== 0);
+  return valid.length > 0 ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
+}
+
+type SortDir = 'asc' | 'desc';
+
+function useSortable<T>(data: T[], defaultKey: keyof T, defaultDir: SortDir = 'desc') {
+  const [sortKey, setSortKey] = useState<keyof T>(defaultKey);
+  const [sortDir, setSortDir] = useState<SortDir>(defaultDir);
+
+  const sorted = useMemo(() => {
+    return [...data].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const cmp = typeof av === 'string' ? (av as string).localeCompare(bv as string) : (av as number) - (bv as number);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [data, sortKey, sortDir]);
+
+  const toggle = (key: keyof T) => {
+    if (key === sortKey) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
+  };
+
+  const SortIcon = ({ col }: { col: keyof T }) => {
+    if (col !== sortKey) return null;
+    return sortDir === 'asc' ? <ChevronUp className="w-3 h-3 inline" /> : <ChevronDown className="w-3 h-3 inline" />;
+  };
+
+  return { sorted, toggle, sortKey, sortDir, SortIcon };
+}
+
+// ─── KPI Card ────────────────────────────────────────────────────────────────
+
+function KPI({ label, value }: { label: string; value: string | number | null }) {
+  return (
+    <div className="bg-muted/30 rounded-lg px-4 py-3 border border-border">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-lg font-bold mt-0.5">{value ?? '—'}</div>
+    </div>
+  );
+}
+
+// ─── Risk row coloring ───────────────────────────────────────────────────────
+
+function riskRowClass(dqPct: number | null, avgDq: number): string {
+  if (dqPct == null) return '';
+  if (dqPct > avgDq * 2) return 'bg-red-500/10';
+  if (dqPct > avgDq * 1.5) return 'bg-yellow-500/10';
+  if (dqPct < avgDq) return 'bg-green-500/5';
+  return '';
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ROOT
+// ═════════════════════════════════════════════════════════════════════════════
 
 export default function DeepDive({ snapshot, data, subTab, onSubTabChange }: Props) {
   return (
@@ -40,281 +109,508 @@ export default function DeepDive({ snapshot, data, subTab, onSubTabChange }: Pro
       </TabsList>
 
       <TabsContent value="lo">
-        {subTab === 'lo' && <LoanOfficerPanel snapshot={snapshot} />}
+        {subTab === 'lo' && <LoanOfficerPanel loans={snapshot.loans} />}
       </TabsContent>
       <TabsContent value="uw">
-        {subTab === 'uw' && <UnderwriterPanel snapshot={snapshot} data={data} />}
+        {subTab === 'uw' && <UnderwriterPanel loans={snapshot.loans} />}
       </TabsContent>
       <TabsContent value="tpo">
-        {subTab === 'tpo' && <TPOPanel snapshot={snapshot} data={data} />}
+        {subTab === 'tpo' && <TPOPanel loans={snapshot.loans} />}
       </TabsContent>
       <TabsContent value="branch">
-        {subTab === 'branch' && <BranchInternalPanel snapshot={snapshot} />}
+        {subTab === 'branch' && <BranchPanel loans={snapshot.loans} />}
       </TabsContent>
     </Tabs>
   );
 }
 
-// ─── LO Risk Panel (top performers + bottom performers from snapshot LOs) ────
+// ═════════════════════════════════════════════════════════════════════════════
+// LOAN OFFICERS (Enc Data only)
+// ═════════════════════════════════════════════════════════════════════════════
 
-function LoanOfficerPanel({ snapshot }: { snapshot: Snapshot }) {
-  const los = snapshot.loan_officer_performance ?? [];
-  const sized = los.filter(l => (l.funded_count ?? 0) >= 5);
+interface LORow {
+  lo_name: string;
+  lo_employee_id: string;
+  branch_name: string;
+  loan_count: number;
+  dq_count: number;
+  dq_pct: number | null;
+  avg_fico: number | null;
+  avg_ltv: number | null;
+  dpa_pct: number | null;
+}
 
-  const worst = useMemo(
-    () => [...sized].sort((a, b) => (b.delinquency_pct ?? 0) - (a.delinquency_pct ?? 0)).slice(0, 25),
-    [sized],
+function LoanOfficerPanel({ loans }: { loans: Loan[] }) {
+  const { rows, totalLOs, avgLoansPerLO, highestDqLO, avgFico } = useMemo(() => {
+    // Filter out LO Employee ID = 0 (wholesale loans, no LO assigned)
+    const eligible = loans.filter(l => l.lo_nmls_id && l.lo_nmls_id !== '0' && l.lo_nmls_id !== '0.0');
+
+    const byLO = new Map<string, Loan[]>();
+    for (const l of eligible) {
+      const key = l.lo_nmls_id!;
+      const arr = byLO.get(key) ?? [];
+      arr.push(l);
+      byLO.set(key, arr);
+    }
+
+    const rows: LORow[] = [];
+    for (const [id, group] of byLO) {
+      const dqCount = group.filter(l => l.is_delinquent).length;
+      const dpaCount = group.filter(l => l.has_dpa).length;
+      rows.push({
+        lo_name: group[0].loan_officer ?? '—',
+        lo_employee_id: id,
+        branch_name: group[0].branch_name_retail ?? group[0].branch_name ?? '—',
+        loan_count: group.length,
+        dq_count: dqCount,
+        dq_pct: pct(dqCount, group.length),
+        avg_fico: avg(group.map(l => l.fico_score)),
+        avg_ltv: avg(group.map(l => l.ltv)),
+        dpa_pct: pct(dpaCount, group.length),
+      });
+    }
+
+    const totalLOs = rows.length;
+    const avgLoansPerLO = totalLOs > 0 ? Math.round(eligible.length / totalLOs * 10) / 10 : 0;
+    const highestDqLO = rows.reduce<LORow | null>((best, r) =>
+      (r.loan_count >= 3 && (best == null || (r.dq_pct ?? 0) > (best.dq_pct ?? 0))) ? r : best, null);
+    const avgFico = avg(eligible.map(l => l.fico_score));
+
+    return { rows, totalLOs, avgLoansPerLO, highestDqLO, avgFico };
+  }, [loans]);
+
+  const { sorted, toggle, SortIcon } = useSortable(rows, 'dq_pct', 'desc');
+
+  const th = (label: string, key: keyof LORow, align = 'text-right') => (
+    <th className={`${align} px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground`} onClick={() => toggle(key)}>
+      {label} <SortIcon col={key} />
+    </th>
   );
 
   return (
     <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KPI label="Total LOs" value={totalLOs} />
+        <KPI label="Avg Loans / LO" value={avgLoansPerLO} />
+        <KPI label="Highest DQ LO" value={highestDqLO ? `${highestDqLO.lo_name} (${fmt(highestDqLO.dq_pct)})` : '—'} />
+        <KPI label="Avg FICO (Portfolio)" value={avgFico} />
+      </div>
+
       <div className="bg-card rounded-lg border border-border p-6">
         <div className="flex items-center gap-2 mb-1">
           <Users className="w-4 h-4 text-risk-blue" />
-          <h3 className="text-sm font-semibold">Loan Officer Risk Panel</h3>
+          <h3 className="text-sm font-semibold">Loan Officers — Enc Data ({rows.length})</h3>
         </div>
         <p className="text-xs text-muted-foreground mb-4">
-          Top 25 LOs by DQ rate ({sized.length} LOs with ≥5 funded loans).
-        </p>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-muted/40 text-muted-foreground">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">LO</th>
-                <th className="text-left px-3 py-2 font-medium">NMLS</th>
-                <th className="text-right px-3 py-2 font-medium">Funded</th>
-                <th className="text-right px-3 py-2 font-medium">DQ</th>
-                <th className="text-right px-3 py-2 font-medium">DQ %</th>
-                <th className="text-right px-3 py-2 font-medium">vs Baseline</th>
-              </tr>
-            </thead>
-            <tbody>
-              {worst.map(l => (
-                <tr key={l.lo_nmls_id} className="border-t border-border">
-                  <td className="px-3 py-2">{l.lo_name ?? '—'}</td>
-                  <td className="px-3 py-2 font-mono text-[11px]">{l.lo_nmls_id}</td>
-                  <td className="px-3 py-2 text-right">{l.funded_count}</td>
-                  <td className="px-3 py-2 text-right">{l.delinquent_count}</td>
-                  <td className="px-3 py-2 text-right">
-                    {l.delinquency_pct != null ? `${l.delinquency_pct.toFixed(2)}%` : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {l.baseline_comparison != null ? (
-                      <span className={l.baseline_comparison > 0 ? 'text-risk-red' : 'text-risk-green'}>
-                        {l.baseline_comparison > 0 ? '+' : ''}{l.baseline_comparison.toFixed(2)} pp
-                      </span>
-                    ) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Underwriter Panel ───────────────────────────────────────────────────────
-
-function UnderwriterPanel({ snapshot, data }: { snapshot: Snapshot; data: DashboardData }) {
-  const rows = data.underwriterRollup ?? snapshot.underwriter_rollup ?? [];
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-card rounded-lg border border-border p-6">
-        <div className="flex items-center gap-2 mb-1">
-          <GraduationCap className="w-4 h-4 text-risk-blue" />
-          <h3 className="text-sm font-semibold">Underwriter Performance ({rows.length})</h3>
-        </div>
-        <p className="text-xs text-muted-foreground mb-4">
-          From HUD Neighborhood Watch (NW Data 2). Limited to underwriters with at least one
-          SDQ-reported loan. Compare ratio is relative to the firm-wide SDQ rate.
-        </p>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-muted/40 text-muted-foreground">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">Underwriter</th>
-                <th className="text-left px-3 py-2 font-medium">UW ID</th>
-                <th className="text-right px-3 py-2 font-medium">Loans</th>
-                <th className="text-right px-3 py-2 font-medium">SDQ</th>
-                <th className="text-right px-3 py-2 font-medium">SDQ %</th>
-                <th className="text-right px-3 py-2 font-medium">Compare Ratio</th>
-                <th className="text-left px-3 py-2 font-medium">Credit Rating Mix</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={`${r.underwriter_name}-${r.underwriter_id}`} className="border-t border-border">
-                  <td className="px-3 py-2">{r.underwriter_name}</td>
-                  <td className="px-3 py-2 font-mono text-[11px]">{r.underwriter_id || '—'}</td>
-                  <td className="px-3 py-2 text-right">{r.loan_count}</td>
-                  <td className="px-3 py-2 text-right">{r.sdq_count}</td>
-                  <td className="px-3 py-2 text-right">
-                    {r.sdq_pct != null ? `${r.sdq_pct.toFixed(2)}%` : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <span className={badgeClass(r.compare_ratio)}>
-                      {r.compare_ratio != null ? `${Math.round(r.compare_ratio)}%` : '—'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-[11px]">
-                    {r.mortgage_credit_rating_breakdown
-                      .map(b => `${b.rating}: ${b.count}`)
-                      .join(' · ') || '—'}
-                  </td>
-                </tr>
-              ))}
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground italic">
-                    No underwriter data in this snapshot.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── TPO / Sponsor Panel ─────────────────────────────────────────────────────
-
-function TPOPanel({ snapshot, data }: { snapshot: Snapshot; data: DashboardData }) {
-  const rows = data.sponsorTPODetail ?? snapshot.sponsor_tpo_detail ?? [];
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-card rounded-lg border border-border p-6">
-        <div className="flex items-center gap-2 mb-1">
-          <Handshake className="w-4 h-4 text-risk-blue" />
-          <h3 className="text-sm font-semibold">Sponsored Originator (TPO) Detail ({rows.length})</h3>
-        </div>
-        <p className="text-xs text-muted-foreground mb-4">
-          Per-TPO SDQ counts from NW Data 2 sponsor columns. Sorted by loan count.
-        </p>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-muted/40 text-muted-foreground">
-              <tr>
-                <th className="text-left px-3 py-2 font-medium">Sponsored Originator</th>
-                <th className="text-left px-3 py-2 font-medium">NMLS</th>
-                <th className="text-left px-3 py-2 font-medium">EIN ★4</th>
-                <th className="text-right px-3 py-2 font-medium">Loans</th>
-                <th className="text-right px-3 py-2 font-medium">SDQ</th>
-                <th className="text-right px-3 py-2 font-medium">SDQ %</th>
-                <th className="text-right px-3 py-2 font-medium">Compare Ratio</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={`${r.sponsor_originator_name}-${r.sponsor_originator_nmls_id}`} className="border-t border-border">
-                  <td className="px-3 py-2">{r.sponsor_originator_name}</td>
-                  <td className="px-3 py-2 font-mono text-[11px]">{r.sponsor_originator_nmls_id ?? '—'}</td>
-                  <td className="px-3 py-2 font-mono text-[11px]">{r.sponsor_originator_ein_last4 ?? '—'}</td>
-                  <td className="px-3 py-2 text-right">{r.loan_count}</td>
-                  <td className="px-3 py-2 text-right">{r.sdq_count}</td>
-                  <td className="px-3 py-2 text-right">
-                    {r.sdq_pct != null ? `${r.sdq_pct.toFixed(2)}%` : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <span className={badgeClass(r.compare_ratio)}>
-                      {r.compare_ratio != null ? `${Math.round(r.compare_ratio)}%` : '—'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground italic">
-                    No TPO data in this snapshot.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Branch Internal (AFN-internal analytics from the loan list) ─────────────
-
-function BranchInternalPanel({ snapshot }: { snapshot: Snapshot }) {
-  // Aggregate AFN-internal branch performance from the loan list.
-  // Branch is approximated by `branch_nmls_id`.
-  const rows = useMemo(() => {
-    const by = new Map<string, { name: string; total: number; dlq: number }>();
-    for (const l of snapshot.loans) {
-      const key = l.branch_nmls_id || 'Unassigned';
-      const cur = by.get(key) ?? { name: key, total: 0, dlq: 0 };
-      cur.total += 1;
-      if (l.is_delinquent) cur.dlq += 1;
-      by.set(key, cur);
-    }
-    return Array.from(by.values())
-      .filter(b => b.total >= 5)
-      .map(b => ({
-        ...b,
-        dqPct: b.total > 0 ? (b.dlq / b.total) * 100 : 0,
-      }))
-      .sort((a, b) => b.dqPct - a.dqPct);
-  }, [snapshot]);
-
-  const baseline = useMemo(() => {
-    const total = snapshot.loans.length;
-    const dlq = snapshot.loans.filter(l => l.is_delinquent).length;
-    return total > 0 ? (dlq / total) * 100 : 0;
-  }, [snapshot]);
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-card rounded-lg border border-border p-6">
-        <div className="flex items-center gap-2 mb-1">
-          <Building className="w-4 h-4 text-risk-blue" />
-          <h3 className="text-sm font-semibold">Branch Internal DQ Analytics</h3>
-        </div>
-        <p className="text-xs text-muted-foreground mb-4">
-          AFN-internal DQ rate by branch (NMLS ID), computed from the full loan list.
-          Firm baseline DQ rate: <span className="font-medium">{baseline.toFixed(2)}%</span>.
-          Branches with ≥5 loans shown ({rows.length}).
+          All retail LOs (Employee ID ≠ 0). Click headers to sort.
         </p>
 
         <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="bg-muted/40 text-muted-foreground sticky top-0">
               <tr>
-                <th className="text-left px-3 py-2 font-medium">Branch NMLS</th>
-                <th className="text-right px-3 py-2 font-medium">Loans</th>
-                <th className="text-right px-3 py-2 font-medium">DQ</th>
-                <th className="text-right px-3 py-2 font-medium">DQ %</th>
-                <th className="text-right px-3 py-2 font-medium">vs Baseline</th>
+                {th('LO Name', 'lo_name', 'text-left')}
+                {th('Employee ID', 'lo_employee_id', 'text-left')}
+                {th('Branch', 'branch_name', 'text-left')}
+                {th('Loans', 'loan_count')}
+                {th('DQ', 'dq_count')}
+                {th('DQ %', 'dq_pct')}
+                {th('Avg FICO', 'avg_fico')}
+                {th('Avg LTV', 'avg_ltv')}
+                {th('DPA %', 'dpa_pct')}
               </tr>
             </thead>
             <tbody>
-              {rows.map(b => (
-                <tr key={b.name} className="border-t border-border">
-                  <td className="px-3 py-2 font-mono text-[11px]">{b.name}</td>
-                  <td className="px-3 py-2 text-right">{b.total}</td>
-                  <td className="px-3 py-2 text-right">{b.dlq}</td>
-                  <td className="px-3 py-2 text-right">{b.dqPct.toFixed(2)}%</td>
-                  <td className="px-3 py-2 text-right">
-                    {(() => {
-                      const diff = b.dqPct - baseline;
-                      return (
-                        <span className={diff > 0 ? 'text-risk-red' : 'text-risk-green'}>
-                          {diff > 0 ? '+' : ''}{diff.toFixed(2)} pp
-                        </span>
-                      );
-                    })()}
-                  </td>
+              {sorted.map(r => (
+                <tr key={r.lo_employee_id} className="border-t border-border">
+                  <td className="px-3 py-2">{r.lo_name}</td>
+                  <td className="px-3 py-2 font-mono text-[11px]">{r.lo_employee_id}</td>
+                  <td className="px-3 py-2 max-w-[180px] truncate">{r.branch_name}</td>
+                  <td className="px-3 py-2 text-right">{r.loan_count}</td>
+                  <td className="px-3 py-2 text-right">{r.dq_count}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dq_pct)}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_fico ?? '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_ltv != null ? r.avg_ltv.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dpa_pct)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// UNDERWRITERS (Enc Data col 67 — covers ALL loans)
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface UWRow {
+  underwriter: string;
+  loan_count: number;
+  dq_count: number;
+  dq_pct: number | null;
+  avg_fico: number | null;
+  avg_ltv: number | null;
+  uw_type_breakdown: string;
+}
+
+function UnderwriterPanel({ loans }: { loans: Loan[] }) {
+  const { rows, totalUWs, avgLoansPerUW, highestDqUW } = useMemo(() => {
+    const byUW = new Map<string, Loan[]>();
+    for (const l of loans) {
+      const uw = l.underwriter;
+      if (!uw) continue;
+      const arr = byUW.get(uw) ?? [];
+      arr.push(l);
+      byUW.set(uw, arr);
+    }
+
+    const rows: UWRow[] = [];
+    for (const [name, group] of byUW) {
+      const dqCount = group.filter(l => l.is_delinquent).length;
+      // Underwriting type breakdown
+      const typeCounts = new Map<string, number>();
+      for (const l of group) {
+        const t = l.underwriting_type ?? l.aus ?? 'Unknown';
+        typeCounts.set(t, (typeCounts.get(t) ?? 0) + 1);
+      }
+      const breakdown = [...typeCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, c]) => `${t}: ${c}`)
+        .join(' · ');
+
+      rows.push({
+        underwriter: name,
+        loan_count: group.length,
+        dq_count: dqCount,
+        dq_pct: pct(dqCount, group.length),
+        avg_fico: avg(group.map(l => l.fico_score)),
+        avg_ltv: avg(group.map(l => l.ltv)),
+        uw_type_breakdown: breakdown,
+      });
+    }
+
+    const totalUWs = rows.length;
+    const totalLoansWithUW = rows.reduce((s, r) => s + r.loan_count, 0);
+    const avgLoansPerUW = totalUWs > 0 ? Math.round(totalLoansWithUW / totalUWs * 10) / 10 : 0;
+    const highestDqUW = rows.reduce<UWRow | null>((best, r) =>
+      (r.loan_count >= 3 && (best == null || (r.dq_pct ?? 0) > (best.dq_pct ?? 0))) ? r : best, null);
+
+    return { rows, totalUWs, avgLoansPerUW, highestDqUW };
+  }, [loans]);
+
+  const { sorted, toggle, SortIcon } = useSortable(rows, 'dq_pct', 'desc');
+
+  const th = (label: string, key: keyof UWRow, align = 'text-right') => (
+    <th className={`${align} px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground`} onClick={() => toggle(key)}>
+      {label} <SortIcon col={key} />
+    </th>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <KPI label="Total Underwriters" value={totalUWs} />
+        <KPI label="Avg Loans / UW" value={avgLoansPerUW} />
+        <KPI label="Highest DQ UW" value={highestDqUW ? `${highestDqUW.underwriter} (${fmt(highestDqUW.dq_pct)})` : '—'} />
+      </div>
+
+      <div className="bg-card rounded-lg border border-border p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <GraduationCap className="w-4 h-4 text-risk-blue" />
+          <h3 className="text-sm font-semibold">Underwriters — Enc Data ({rows.length})</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          All loans with an underwriter (Enc Data col 67). Covers the full portfolio, not just SDQ.
+        </p>
+
+        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/40 text-muted-foreground sticky top-0">
+              <tr>
+                {th('Underwriter', 'underwriter', 'text-left')}
+                {th('Loans', 'loan_count')}
+                {th('DQ', 'dq_count')}
+                {th('DQ %', 'dq_pct')}
+                {th('Avg FICO', 'avg_fico')}
+                {th('Avg LTV', 'avg_ltv')}
+                <th className="text-left px-3 py-2 font-medium">UW Type Breakdown</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(r => (
+                <tr key={r.underwriter} className="border-t border-border">
+                  <td className="px-3 py-2">{r.underwriter}</td>
+                  <td className="px-3 py-2 text-right">{r.loan_count}</td>
+                  <td className="px-3 py-2 text-right">{r.dq_count}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dq_pct)}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_fico ?? '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_ltv != null ? r.avg_ltv.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-[11px] max-w-[250px] truncate">{r.uw_type_breakdown || '—'}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground italic">No underwriter data.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TPO / BROKER (Enc Data only — col 62 Broker, col 63 AE Name)
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface TPORow {
+  broker: string;
+  loan_count: number;
+  dq_count: number;
+  dq_pct: number | null;
+  avg_fico: number | null;
+  avg_ltv: number | null;
+  dpa_pct: number | null;
+  states: string;
+  ae_names: string;
+}
+
+function TPOPanel({ loans }: { loans: Loan[] }) {
+  const { rows, totalBrokers, totalWholesale, wholesaleDqRate } = useMemo(() => {
+    // Wholesale loans = those with a Broker field populated (Enc Data col 62)
+    const wholesale = loans.filter(l => l.broker);
+    const totalWholesale = wholesale.length;
+    const wholesaleDq = wholesale.filter(l => l.is_delinquent).length;
+    const wholesaleDqRate = pct(wholesaleDq, totalWholesale);
+
+    const byBroker = new Map<string, Loan[]>();
+    for (const l of wholesale) {
+      const key = l.broker!;
+      const arr = byBroker.get(key) ?? [];
+      arr.push(l);
+      byBroker.set(key, arr);
+    }
+
+    const rows: TPORow[] = [];
+    for (const [name, group] of byBroker) {
+      const dqCount = group.filter(l => l.is_delinquent).length;
+      const dpaCount = group.filter(l => l.has_dpa).length;
+      const stateSet = new Set(group.map(l => l.property_state).filter(Boolean));
+      const aeSet = new Set(group.map(l => l.ae_name).filter(Boolean));
+
+      rows.push({
+        broker: name,
+        loan_count: group.length,
+        dq_count: dqCount,
+        dq_pct: pct(dqCount, group.length),
+        avg_fico: avg(group.map(l => l.fico_score)),
+        avg_ltv: avg(group.map(l => l.ltv)),
+        dpa_pct: pct(dpaCount, group.length),
+        states: [...stateSet].sort().join(', '),
+        ae_names: [...aeSet].sort().slice(0, 3).join(', ') + (aeSet.size > 3 ? ` +${aeSet.size - 3}` : ''),
+      });
+    }
+
+    return { rows, totalBrokers: rows.length, totalWholesale, wholesaleDqRate };
+  }, [loans]);
+
+  const { sorted, toggle, SortIcon } = useSortable(rows, 'dq_pct', 'desc');
+
+  const th = (label: string, key: keyof TPORow, align = 'text-right') => (
+    <th className={`${align} px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground`} onClick={() => toggle(key)}>
+      {label} <SortIcon col={key} />
+    </th>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <KPI label="Total Brokers" value={totalBrokers} />
+        <KPI label="Total Wholesale Loans" value={totalWholesale.toLocaleString()} />
+        <KPI label="Wholesale DQ Rate" value={fmt(wholesaleDqRate)} />
+      </div>
+
+      <div className="bg-card rounded-lg border border-border p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Handshake className="w-4 h-4 text-risk-blue" />
+          <h3 className="text-sm font-semibold">TPO / Broker — Enc Data ({rows.length})</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          Wholesale brokers from Enc Data (col 62). Covers all wholesale loans, not just SDQ.
+        </p>
+
+        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/40 text-muted-foreground sticky top-0">
+              <tr>
+                {th('Broker', 'broker', 'text-left')}
+                {th('Loans', 'loan_count')}
+                {th('DQ', 'dq_count')}
+                {th('DQ %', 'dq_pct')}
+                {th('Avg FICO', 'avg_fico')}
+                {th('Avg LTV', 'avg_ltv')}
+                {th('DPA %', 'dpa_pct')}
+                <th className="text-left px-3 py-2 font-medium">States</th>
+                <th className="text-left px-3 py-2 font-medium">AE Name(s)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(r => (
+                <tr key={r.broker} className="border-t border-border">
+                  <td className="px-3 py-2 max-w-[200px] truncate">{r.broker}</td>
+                  <td className="px-3 py-2 text-right">{r.loan_count}</td>
+                  <td className="px-3 py-2 text-right">{r.dq_count}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dq_pct)}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_fico ?? '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_ltv != null ? r.avg_ltv.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dpa_pct)}</td>
+                  <td className="px-3 py-2 text-[11px] max-w-[120px] truncate">{r.states || '—'}</td>
+                  <td className="px-3 py-2 text-[11px] max-w-[180px] truncate">{r.ae_names || '—'}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan={9} className="px-3 py-6 text-center text-muted-foreground italic">No broker data.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BRANCHES (AFN) — Enc Data col 11 Branch Name + col 10 Org ID
+// ═════════════════════════════════════════════════════════════════════════════
+
+interface BranchRow {
+  branch_name: string;
+  org_id: string;
+  loan_count: number;
+  dq_count: number;
+  dq_pct: number | null;
+  avg_fico: number | null;
+  avg_ltv: number | null;
+  dpa_pct: number | null;
+  channel_mix: string;
+  top_los: string;
+}
+
+function BranchPanel({ loans }: { loans: Loan[] }) {
+  const { rows, totalBranches, highestRiskBranch, avgDqRate } = useMemo(() => {
+    const byBranch = new Map<string, { name: string; orgId: string; loans: Loan[] }>();
+    for (const l of loans) {
+      const key = l.branch_nmls_id ?? l.branch_name ?? 'Unassigned';
+      const cur = byBranch.get(key) ?? { name: l.branch_name ?? key, orgId: l.branch_nmls_id ?? '—', loans: [] };
+      cur.loans.push(l);
+      byBranch.set(key, cur);
+    }
+
+    const totalDq = loans.filter(l => l.is_delinquent).length;
+    const avgDqRate = pct(totalDq, loans.length);
+
+    const rows: BranchRow[] = [];
+    for (const [, { name, orgId, loans: group }] of byBranch) {
+      const dqCount = group.filter(l => l.is_delinquent).length;
+      const dpaCount = group.filter(l => l.has_dpa).length;
+      const retail = group.filter(l => l.channel === 'Retail').length;
+      const wholesale = group.filter(l => l.channel === 'Wholesale').length;
+      const channelMix = [
+        retail > 0 ? `R:${retail}` : null,
+        wholesale > 0 ? `W:${wholesale}` : null,
+      ].filter(Boolean).join(' / ') || '—';
+
+      // Top LOs by loan count
+      const loMap = new Map<string, { name: string; count: number }>();
+      for (const l of group) {
+        if (!l.lo_nmls_id || l.lo_nmls_id === '0' || l.lo_nmls_id === '0.0') continue;
+        const cur = loMap.get(l.lo_nmls_id) ?? { name: l.loan_officer ?? l.lo_nmls_id, count: 0 };
+        cur.count++;
+        loMap.set(l.lo_nmls_id, cur);
+      }
+      const topLOs = [...loMap.values()]
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3)
+        .map(lo => `${lo.name} (${lo.count})`)
+        .join(', ');
+
+      rows.push({
+        branch_name: name,
+        org_id: orgId,
+        loan_count: group.length,
+        dq_count: dqCount,
+        dq_pct: pct(dqCount, group.length),
+        avg_fico: avg(group.map(l => l.fico_score)),
+        avg_ltv: avg(group.map(l => l.ltv)),
+        dpa_pct: pct(dpaCount, group.length),
+        channel_mix: channelMix,
+        top_los: topLOs || '—',
+      });
+    }
+
+    const highestRiskBranch = rows.reduce<BranchRow | null>((best, r) =>
+      (r.loan_count >= 5 && (best == null || (r.dq_pct ?? 0) > (best.dq_pct ?? 0))) ? r : best, null);
+
+    return { rows, totalBranches: rows.length, highestRiskBranch, avgDqRate };
+  }, [loans]);
+
+  const { sorted, toggle, SortIcon } = useSortable(rows, 'dq_pct', 'desc');
+
+  const th = (label: string, key: keyof BranchRow, align = 'text-right') => (
+    <th className={`${align} px-3 py-2 font-medium cursor-pointer select-none hover:text-foreground`} onClick={() => toggle(key)}>
+      {label} <SortIcon col={key} />
+    </th>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <KPI label="Total Branches" value={totalBranches} />
+        <KPI label="Highest Risk Branch" value={highestRiskBranch ? `${highestRiskBranch.branch_name} (${fmt(highestRiskBranch.dq_pct)})` : '—'} />
+        <KPI label="Avg DQ Rate" value={fmt(avgDqRate)} />
+      </div>
+
+      <div className="bg-card rounded-lg border border-border p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Building className="w-4 h-4 text-risk-blue" />
+          <h3 className="text-sm font-semibold">Branches — Enc Data ({rows.length})</h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          All branches by Org ID (col 10) / Branch Name (col 11). Color-coded: 🔴 &gt;2× avg DQ, 🟡 &gt;1.5×, 🟢 below avg.
+        </p>
+
+        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/40 text-muted-foreground sticky top-0">
+              <tr>
+                {th('Branch Name', 'branch_name', 'text-left')}
+                {th('Org ID', 'org_id', 'text-left')}
+                {th('Loans', 'loan_count')}
+                {th('DQ', 'dq_count')}
+                {th('DQ %', 'dq_pct')}
+                {th('Avg FICO', 'avg_fico')}
+                {th('Avg LTV', 'avg_ltv')}
+                {th('DPA %', 'dpa_pct')}
+                <th className="text-left px-3 py-2 font-medium">Channel Mix</th>
+                <th className="text-left px-3 py-2 font-medium">Top LOs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(r => (
+                <tr key={`${r.org_id}-${r.branch_name}`} className={`border-t border-border ${riskRowClass(r.dq_pct, avgDqRate ?? 0)}`}>
+                  <td className="px-3 py-2 max-w-[200px] truncate">{r.branch_name}</td>
+                  <td className="px-3 py-2 font-mono text-[11px]">{r.org_id}</td>
+                  <td className="px-3 py-2 text-right">{r.loan_count}</td>
+                  <td className="px-3 py-2 text-right">{r.dq_count}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dq_pct)}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_fico ?? '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.avg_ltv != null ? r.avg_ltv.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right">{fmt(r.dpa_pct)}</td>
+                  <td className="px-3 py-2 text-[11px]">{r.channel_mix}</td>
+                  <td className="px-3 py-2 text-[11px] max-w-[220px] truncate">{r.top_los}</td>
                 </tr>
               ))}
             </tbody>

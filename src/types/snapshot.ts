@@ -297,6 +297,16 @@ export interface Loan {
   payments_before_first_90_day_delinquent?: number | null;
   /** Indemnification flag from NW Data 2 (Y, P, etc.). */
   indemnification_flag?: string | null;
+
+  // ── Enc Data broker / branch fields ──
+  /** TPO Broker from Enc Data (mostly null). */
+  tpo_broker?: string | null;
+  /** Broker company name from Enc Data (wholesale channel). */
+  broker?: string | null;
+  /** Branch Name from Enc Data. */
+  branch_name?: string | null;
+  /** Branch Name - Retail from Enc Data. */
+  branch_name_retail?: string | null;
 }
 
 // ─── NW Data extension rollups ────────────────────────────────────────
