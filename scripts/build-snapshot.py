@@ -686,6 +686,25 @@ def build_loans(enc_path: Path, nw2_path: Path,
                 row.get("Payments before First 90 Day Delinquent Reported")
             ),
             "indemnification_flag": _clean_str(row.get("Indem")),
+
+            # ── Enc Data fields for Deep Dive ──
+            "underwriter_enc": _clean_str(row.get("Underwriter")),
+            "lo_employee_id": _clean_str(row.get("LO Employee ID")),
+            "dq_status_enc": _clean_str(row.get("DQ")),
+            "hud_reason_code_enc": _clean_str(row.get("HUD Reason Code")),
+            "ae_name": _clean_str(row.get("AE Name")),
+            "subservicer": _clean_str(row.get("Subservicer")),
+            "org_id": _clean_str(row.get("Org ID")),
+            "tpo_broker_flag": _clean_str(row.get("TPO Broker")),
+            "funded_date": _iso_date(row.get("Fund Date")),
+            "closed_date": _iso_date(row.get("Closed Date")),
+            "lien_position": _clean_str(row.get("Lien Position")),
+            "borrower_count": _clean_int(row.get("Borrower Count")),
+            "total_income": _clean_num(row.get("Total Income")),
+            "is_fthb": str(row.get("FTHB") or "").strip().lower() == "yes",
+            "cltv": _clean_num(row.get("CLTV")),
+            "interest_rate": _clean_num(row.get("Interest Rate")),
+            "insuring_hoc": _clean_str(row.get("Insuring HOC Center")),
         })
 
     return loans

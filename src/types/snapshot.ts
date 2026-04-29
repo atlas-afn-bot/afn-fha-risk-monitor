@@ -307,6 +307,42 @@ export interface Loan {
   branch_name?: string | null;
   /** Branch Name - Retail from Enc Data. */
   branch_name_retail?: string | null;
+
+  // ─── Additional Enc Data fields for Deep Dive ───────────────────────
+  /** Encompass Underwriter name (col 67). */
+  underwriter_enc?: string | null;
+  /** Encompass LO Employee ID (col 64). */
+  lo_employee_id?: string | null;
+  /** Encompass DQ flag (col 0, raw string e.g. "Yes"/"No"). */
+  dq_status_enc?: string | null;
+  /** Encompass HUD Reason Code (col 3). */
+  hud_reason_code_enc?: string | null;
+  /** AE (Account Executive) name from Encompass (col 63). */
+  ae_name?: string | null;
+  /** Subservicer name from Encompass (col 55). */
+  subservicer?: string | null;
+  /** Org ID from Encompass (col 10) — branch NMLS. */
+  org_id?: string | null;
+  /** TPO Broker flag from Encompass (col 151). */
+  tpo_broker_flag?: string | null;
+  /** Fund date from Encompass. */
+  funded_date?: string | null;
+  /** Closed date from Encompass. */
+  closed_date?: string | null;
+  /** Lien position from Encompass. */
+  lien_position?: string | null;
+  /** Borrower count from Encompass. */
+  borrower_count?: number | null;
+  /** Total income from Encompass. */
+  total_income?: number | null;
+  /** Is FTHB from Encompass. */
+  is_fthb?: boolean;
+  /** CLTV from Encompass. */
+  cltv?: number | null;
+  /** Interest rate from Encompass/NW. */
+  interest_rate?: number | null;
+  /** Insuring HOC Center from Encompass. */
+  insuring_hoc?: string | null;
 }
 
 // ─── NW Data extension rollups ────────────────────────────────────────
