@@ -36,7 +36,7 @@ type TabId = 'overview' | 'hud-offices' | 'hoc' | 'branches-hud' | 'deep-dive' |
 
 const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
   { id: 'overview',     emoji: '📊', label: 'Overview' },
-  { id: 'hud-offices',  emoji: '🏢', label: 'HUD Field Offices' },
+  { id: 'hud-offices',  emoji: '📋', label: 'FHA Risk Factors' },
   { id: 'hoc',          emoji: '🌎', label: 'HOC Analysis' },
   { id: 'branches-hud', emoji: '🏬', label: 'Branch Compare Ratios' },
   { id: 'deep-dive',    emoji: '👥', label: 'Loan Data Deep Dive' },
