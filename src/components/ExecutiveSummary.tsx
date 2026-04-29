@@ -6,6 +6,7 @@ import TerminationRiskCards from './TerminationRiskCards';
 
 interface Props {
   data: DashboardData;
+  period: string;
 }
 
 const severityDot: Record<string, string> = {
@@ -15,9 +16,27 @@ const severityDot: Record<string, string> = {
   neutral: 'bg-muted-foreground',
 };
 
-export default function ExecutiveSummary({ data }: Props) {
+const AI_CACHE_PREFIX = 'fha-ai-summary-';
+
+function getCachedBullets(period: string): AIBullet[] | null {
+  try {
+    const raw = localStorage.getItem(`${AI_CACHE_PREFIX}${period}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch { /* corrupted cache — ignore */ }
+  return null;
+}
+
+function setCachedBullets(period: string, bullets: AIBullet[]): void {
+  try {
+    localStorage.setItem(`${AI_CACHE_PREFIX}${period}`, JSON.stringify(bullets));
+  } catch { /* storage full — ignore */ }
+}
+
+export default function ExecutiveSummary({ data, period }: Props) {
   const [expanded, setExpanded] = useState(true);
-  const [aiBullets, setAiBullets] = useState<AIBullet[] | null>(null);
+  const [aiBullets, setAiBullets] = useState<AIBullet[] | null>(() => getCachedBullets(period));
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
@@ -41,18 +60,26 @@ export default function ExecutiveSummary({ data }: Props) {
     try {
       const result = await generateAIAnalysis(data);
       setAiBullets(result.executiveSummary);
+      setCachedBullets(period, result.executiveSummary);
     } catch (e: any) {
       console.error('AI analysis failed:', e);
       setAiError(e.message || 'AI analysis failed');
     } finally {
       setAiLoading(false);
     }
-  }, [data]);
+  }, [data, period]);
 
+  // When the period/data changes, try to load from cache first
   useEffect(() => {
-    setAiBullets(null);
-    setAiError(null);
-  }, [data]);
+    const cached = getCachedBullets(period);
+    if (cached) {
+      setAiBullets(cached);
+      setAiError(null);
+    } else {
+      setAiBullets(null);
+      setAiError(null);
+    }
+  }, [data, period]);
 
   useEffect(() => {
     if (!aiBullets && !aiLoading && !aiError) {

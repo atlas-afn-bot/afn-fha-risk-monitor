@@ -359,7 +359,7 @@ export default function Index() {
                   {visited.has('overview') && (
                     <>
                       <SummaryCards data={data} snapshot={snapshot} />
-                      <ExecutiveSummary data={data} />
+                      <ExecutiveSummary data={data} period={selectedPeriod} />
                       <TrendChart history={hudHistory} />
                       <AIInsights />
                       <SnapshotMetadataCard snapshot={snapshot} data={data} />
