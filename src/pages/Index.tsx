@@ -9,6 +9,13 @@ import type { HUDMonthlySnapshot } from '@/lib/hudHistory';
 import SummaryCards from '@/components/SummaryCards';
 import TrendChart from '@/components/TrendChart';
 import HUDConcentration from '@/components/HUDConcentration';
+import PerformanceMatrix from '@/components/PerformanceMatrix';
+import CreditWatchSimple from '@/components/CreditWatchSimple';
+import PortfolioComposition from '@/components/PortfolioComposition';
+import DPAProviderTable from '@/components/DPAProviderTable';
+import ChannelAnalysis from '@/components/ChannelAnalysis';
+import FICODistribution from '@/components/FICODistribution';
+import RiskFactorCharts from '@/components/RiskFactorCharts';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import AIInsights from '@/components/AIInsights';
 import MonthSelector from '@/components/MonthSelector';
@@ -360,7 +367,19 @@ export default function Index() {
 
                 {/* HUD Field Offices */}
                 <TabsContent value="hud-offices">
-                  {visited.has('hud-offices') && <HUDConcentration data={data} />}
+                  {visited.has('hud-offices') && (
+                    <div className="space-y-6">
+                      <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} />
+                      <PerformanceMatrix offices={data.offices} title="Credit Watch — Top 5 Priority" emoji="⚠️" filterFn={o => o.totalCR >= 150 && o.totalCR <= 200 && o.totalLoans >= 100} maxRows={5} />
+                      <CreditWatchSimple offices={data.offices} />
+                      <PortfolioComposition data={data} />
+                      <DPAProviderTable programs={data.dpaPrograms} overallDQRate={data.overallDQRate} />
+                      <ChannelAnalysis retail={data.retailSummary} wholesale={data.wsSummary} />
+                      <RiskFactorCharts trends={data.trendAnalysis} overallDQRate={data.overallDQRate} />
+                      <FICODistribution buckets={data.ficoBuckets} />
+                      <HUDConcentration data={data} />
+                    </div>
+                  )}
                 </TabsContent>
 
                 {/* HOC Analysis */}
