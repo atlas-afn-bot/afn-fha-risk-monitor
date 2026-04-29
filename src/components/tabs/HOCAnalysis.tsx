@@ -1,5 +1,11 @@
 import type { Snapshot } from '@/types/snapshot';
 import { Globe } from 'lucide-react';
+import HOCRiskHeatmap from '@/components/hoc/HOCRiskHeatmap';
+import TopRiskOfficesByHOC from '@/components/hoc/TopRiskOfficesByHOC';
+import HOCChannelMix from '@/components/hoc/HOCChannelMix';
+import HOCDPAConcentration from '@/components/hoc/HOCDPAConcentration';
+import HOCRiskIndicatorDensity from '@/components/hoc/HOCRiskIndicatorDensity';
+import HOCFieldOfficeDrillDown from '@/components/hoc/HOCFieldOfficeDrillDown';
 
 interface Props {
   snapshot: Snapshot;
@@ -25,16 +31,17 @@ function badgeClass(val: number | null | undefined): string {
 }
 
 /**
- * Per-HOC compare-ratio cards. Reads `compare_ratios_hoc` straight from the
- * snapshot and renders a tile per HOC region with Total / Retail / Sponsor
- * compare ratios + loan counts.
+ * Per-HOC compare-ratio cards + detailed analysis sections.
+ * Reads `compare_ratios_hoc`, `compare_ratios_hud_office`, and `loans[]`
+ * straight from the snapshot.
  */
 export default function HOCAnalysis({ snapshot }: Props) {
   const rows = snapshot.compare_ratios_hoc ?? [];
   const byName = new Map(rows.map(r => [r.hoc_name, r]));
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* Summary Cards */}
       <div className="bg-card rounded-lg border border-border p-6">
         <div className="flex items-center gap-2 mb-1">
           <Globe className="w-4 h-4 text-risk-blue" />
@@ -85,6 +92,16 @@ export default function HOCAnalysis({ snapshot }: Props) {
           </div>
         )}
       </div>
+
+      {/* New analysis sections */}
+      <HOCRiskHeatmap snapshot={snapshot} />
+      <TopRiskOfficesByHOC snapshot={snapshot} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <HOCChannelMix snapshot={snapshot} />
+        <HOCDPAConcentration snapshot={snapshot} />
+      </div>
+      <HOCRiskIndicatorDensity snapshot={snapshot} />
+      <HOCFieldOfficeDrillDown snapshot={snapshot} />
     </div>
   );
 }

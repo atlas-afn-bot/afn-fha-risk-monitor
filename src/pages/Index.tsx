@@ -362,6 +362,11 @@ export default function Index() {
                       <ExecutiveSummary data={data} period={selectedPeriod} />
                       <TrendChart history={hudHistory} />
                       <AIInsights />
+                      <PortfolioComposition data={data} />
+                      <DPAProviderTable programs={data.dpaPrograms} overallDQRate={data.overallDQRate} />
+                      <ChannelAnalysis retail={data.retailSummary} wholesale={data.wsSummary} />
+                      <RiskFactorCharts trends={data.trendAnalysis} overallDQRate={data.overallDQRate} />
+                      <FICODistribution buckets={data.ficoBuckets} />
                       <SnapshotMetadataCard snapshot={snapshot} data={data} />
                     </>
                   )}
@@ -378,11 +383,6 @@ export default function Index() {
                       <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} />
                       <PerformanceMatrix offices={data.offices} title="Credit Watch — Top 5 Priority" emoji="⚠️" filterFn={o => o.totalCR >= 150 && o.totalCR <= 200 && o.totalLoans >= 100} maxRows={5} />
                       <CreditWatchSimple offices={data.offices} />
-                      <PortfolioComposition data={data} />
-                      <DPAProviderTable programs={data.dpaPrograms} overallDQRate={data.overallDQRate} />
-                      <ChannelAnalysis retail={data.retailSummary} wholesale={data.wsSummary} />
-                      <RiskFactorCharts trends={data.trendAnalysis} overallDQRate={data.overallDQRate} />
-                      <FICODistribution buckets={data.ficoBuckets} />
                       <HUDConcentration data={data} />
                     </div>
                   )}
