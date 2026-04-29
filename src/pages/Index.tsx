@@ -17,6 +17,7 @@ import ChannelAnalysis from '@/components/ChannelAnalysis';
 import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
+import TerminationRiskCards from '@/components/TerminationRiskCards';
 import AIInsights from '@/components/AIInsights';
 import MonthSelector from '@/components/MonthSelector';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -369,6 +370,9 @@ export default function Index() {
                 <TabsContent value="hud-offices">
                   {visited.has('hud-offices') && (
                     <div className="space-y-6">
+                      <div className="bg-card rounded-lg border border-border p-5">
+                        <TerminationRiskCards offices={data.offices} />
+                      </div>
                       <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} />
                       <PerformanceMatrix offices={data.offices} title="Credit Watch — Top 5 Priority" emoji="⚠️" filterFn={o => o.totalCR >= 150 && o.totalCR <= 200 && o.totalLoans >= 100} maxRows={5} />
                       <CreditWatchSimple offices={data.offices} />
