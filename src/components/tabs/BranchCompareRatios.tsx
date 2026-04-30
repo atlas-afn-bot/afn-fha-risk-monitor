@@ -40,6 +40,7 @@ type SortKey = 'nmls_id' | 'loans_underwritten' | 'delinquency_rate' | 'compare_
 
 interface AFNBranchRow {
   branchId: string;
+  branchName: string;
   loanCount: number;
   dqCount: number;
   dqRate: number;
@@ -142,8 +143,21 @@ function useAFNBranches(loans: Loan[]): AFNBranchRow[] {
 
       const loNames = [...new Set(bLoans.map(l => l.loan_officer).filter((v): v is string => !!v))];
 
+      // Get the most common branch name for this Org ID
+      const nameCount = new Map<string, number>();
+      for (const l of bLoans) {
+        const n = l.branch_name;
+        if (n) nameCount.set(n, (nameCount.get(n) ?? 0) + 1);
+      }
+      let branchName = branchId;
+      let maxCount = 0;
+      for (const [n, c] of nameCount) {
+        if (c > maxCount) { branchName = n; maxCount = c; }
+      }
+
       rows.push({
         branchId,
+        branchName,
         loanCount,
         dqCount,
         dqRate: loanCount > 0 ? (dqCount / loanCount) * 100 : 0,
@@ -209,7 +223,7 @@ function BranchKPIs({ afnBranches, hudBranches }: { afnBranches: AFNBranchRow[];
     {
       label: 'Highest-Risk Branch',
       value: stats.worstBranch ? `${stats.worstBranch.dqRate.toFixed(1)}%` : 'N/A',
-      sub: stats.worstBranch ? `Branch ${stats.worstBranch.branchId} (${stats.worstBranch.loanCount} loans)` : '50+ loan threshold',
+      sub: stats.worstBranch ? `${stats.worstBranch.branchName} (${stats.worstBranch.loanCount} loans)` : '50+ loan threshold',
       level: stats.worstBranch ? dqRiskLevel(stats.worstBranch.dqRate) : 'neutral' as const,
     },
     {
@@ -245,6 +259,7 @@ function AFNBranchScorecard({ branches }: { branches: AFNBranchRow[] }) {
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(b =>
+        b.branchName.toLowerCase().includes(q) ||
         b.branchId.toLowerCase().includes(q) ||
         b.loNames.some(n => n.toLowerCase().includes(q))
       );
@@ -294,7 +309,7 @@ function AFNBranchScorecard({ branches }: { branches: AFNBranchRow[] }) {
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search branch ID or LO name…"
+            placeholder="Search branch name, ID, or LO name…"
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
@@ -316,7 +331,7 @@ function AFNBranchScorecard({ branches }: { branches: AFNBranchRow[] }) {
         <table className="w-full text-[11px]">
           <thead className="bg-muted/40 text-muted-foreground">
             <tr>
-              <SortHeader k="branchId" label="Branch ID" />
+              <SortHeader k="branchId" label="Branch" />
               <SortHeader k="loanCount" label="Loans" right />
               <SortHeader k="dqRate" label="DQ Rate" right />
               <th className="px-2 py-2 text-right font-medium">DQ #</th>
@@ -336,7 +351,10 @@ function AFNBranchScorecard({ branches }: { branches: AFNBranchRow[] }) {
               const dpaLevel = dpaRiskLevel(b.dpaPct);
               return (
                 <tr key={b.branchId} className="border-t border-border hover:bg-muted/20">
-                  <td className="px-2 py-1.5 font-mono font-medium">{b.branchId}</td>
+                  <td className="px-2 py-1.5">
+                    <div className="font-medium">{b.branchName}</div>
+                    <div className="text-[10px] text-muted-foreground font-mono">Org {b.branchId}</div>
+                  </td>
                   <td className="px-2 py-1.5 text-right">{b.loanCount.toLocaleString()}</td>
                   <td className="px-2 py-1.5 text-right">
                     <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
@@ -652,7 +670,7 @@ function TopBottomPerformers({ branches }: { branches: AFNBranchRow[] }) {
               <span className="text-[10px] font-bold text-muted-foreground w-4 text-right">#{i + 1}</span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium truncate">Branch {b.branchId}</span>
+                  <span className="text-[11px] font-medium truncate">{b.branchName}</span>
                   <span className={`text-[11px] font-bold ${riskText(level)}`}>
                     {val.toFixed(1)}% {metricLabel}
                   </span>
@@ -722,7 +740,7 @@ function ChannelDistributionChart({ branches }: { branches: AFNBranchRow[] }) {
     });
 
     return sorted.slice(0, 30).map(b => ({
-      branch: b.branchId,
+      branch: b.branchName,
       Retail: b.retailCount,
       Wholesale: b.wholesaleCount,
       total: b.loanCount,
@@ -803,8 +821,8 @@ function ChannelDistributionChart({ branches }: { branches: AFNBranchRow[] }) {
               </p>
               <div className="flex flex-wrap gap-1">
                 {pureWholesale.slice(0, 10).map(b => (
-                  <span key={b.branchId} className="text-[10px] font-mono bg-purple-500/10 px-1.5 py-0.5 rounded">
-                    {b.branchId} ({b.loanCount})
+                  <span key={b.branchId} className="text-[10px] bg-purple-500/10 px-1.5 py-0.5 rounded">
+                    {b.branchName} ({b.loanCount})
                   </span>
                 ))}
                 {pureWholesale.length > 10 && (
@@ -820,8 +838,8 @@ function ChannelDistributionChart({ branches }: { branches: AFNBranchRow[] }) {
               </p>
               <div className="flex flex-wrap gap-1">
                 {pureRetail.slice(0, 10).map(b => (
-                  <span key={b.branchId} className="text-[10px] font-mono bg-blue-500/10 px-1.5 py-0.5 rounded">
-                    {b.branchId} ({b.loanCount})
+                  <span key={b.branchId} className="text-[10px] bg-blue-500/10 px-1.5 py-0.5 rounded">
+                    {b.branchName} ({b.loanCount})
                   </span>
                 ))}
                 {pureRetail.length > 10 && (
