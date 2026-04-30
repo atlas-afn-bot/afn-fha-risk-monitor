@@ -504,8 +504,9 @@ function HUDBranchMapping({ snapshot, state, onState }: Props) {
                 onClick={() => toggleSort('nmls_id')}
                 className="text-left px-3 py-2 font-medium cursor-pointer hover:text-foreground"
               >
-                <span className="inline-flex items-center gap-1">NMLS ID <ArrowUpDown className="w-3 h-3" /></span>
+                <span className="inline-flex items-center gap-1">FHA Branch ID <ArrowUpDown className="w-3 h-3" /></span>
               </th>
+              <th className="text-left px-3 py-2 font-medium">AFN Branch(es)</th>
               <th className="text-left px-3 py-2 font-medium">Status</th>
               <th
                 onClick={() => toggleSort('loans_underwritten')}
@@ -541,7 +542,7 @@ function HUDBranchMapping({ snapshot, state, onState }: Props) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground italic">
+                <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground italic">
                   No branches match the current filter.
                 </td>
               </tr>
@@ -575,6 +576,14 @@ function ExpandableHUDBranchRow({
           }
         </td>
         <td className="px-3 py-2 font-mono text-[11px]">{b.nmls_id}</td>
+        <td className="px-3 py-2 text-[11px] max-w-[200px] truncate" title={b.afn_branch_names?.join(', ') ?? ''}>
+          {b.afn_branch_names
+            ? b.afn_branch_names.length === 1
+              ? b.afn_branch_names[0]
+              : `${b.afn_branch_names[0]} +${b.afn_branch_names.length - 1} more`
+            : <span className="text-muted-foreground italic">—</span>
+          }
+        </td>
         <td className="px-3 py-2">
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
             b.approval_status === 'A'
@@ -598,26 +607,49 @@ function ExpandableHUDBranchRow({
       </tr>
       {isExpanded && (
         <tr className="bg-muted/10">
-          <td colSpan={6} className="px-6 py-3">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
-              <div>
-                <span className="text-muted-foreground">Branch Name:</span>{' '}
-                <span className="font-medium">{b.branch_name ?? 'Not reported'}</span>
+          <td colSpan={7} className="px-6 py-3">
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                <div>
+                  <span className="text-muted-foreground">Loans:</span>{' '}
+                  <span className="font-medium">{(b.loans_underwritten ?? 0).toLocaleString()}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Risk Level:</span>{' '}
+                  <span className={`font-semibold ${riskText(crLevel)}`}>
+                    {crLevel === 'red' ? 'Termination Risk' : crLevel === 'yellow' ? 'Elevated' : 'Normal'}
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-muted-foreground">HUD Office:</span>{' '}
-                <span className="font-medium">{b.hud_office ?? 'Not mapped'}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Loans:</span>{' '}
-                <span className="font-medium">{(b.loans_underwritten ?? 0).toLocaleString()}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Risk Level:</span>{' '}
-                <span className={`font-semibold ${riskText(crLevel)}`}>
-                  {crLevel === 'red' ? 'Termination Risk' : crLevel === 'yellow' ? 'Elevated' : 'Normal'}
-                </span>
-              </div>
+              {b.afn_branch_names && b.afn_branch_names.length > 0 && (
+                <div className="text-[11px]">
+                  <span className="text-muted-foreground font-medium">AFN Branches:</span>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {b.afn_branch_names.map((name: string, i: number) => (
+                      <span key={i} className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[10px]">
+                        {name}{b.afn_org_ids?.[i] ? ` (${b.afn_org_ids[i]})` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {b.hud_offices && b.hud_offices.length > 0 && (
+                <div className="text-[11px]">
+                  <span className="text-muted-foreground font-medium">HUD Offices:</span>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {b.hud_offices.map((office: string, i: number) => (
+                      <span key={i} className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 text-[10px]">
+                        {office}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!b.afn_branch_names && (
+                <p className="text-[10px] text-muted-foreground italic">
+                  No delinquent loans matched to this FHA branch — AFN branch mapping unavailable
+                </p>
+              )}
             </div>
           </td>
         </tr>

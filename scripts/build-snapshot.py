@@ -1116,6 +1116,87 @@ def build_sponsor_tpo_detail(loans: List[dict]) -> List[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HUD Branch → AFN Branch Name bridge (via case number)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _enrich_branch_rows(branch_rows: List[dict], loans: List[dict],
+                        nw2_path: Path) -> None:
+    """Populate afn_branch_names, hud_offices, afn_org_ids on each
+    compare_ratios_branch entry by bridging through NW Data case numbers
+    to Encompass loan records."""
+    wb = openpyxl.load_workbook(nw2_path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    header_idx = -1
+    for i, r in enumerate(rows[:20]):
+        if r and r[0] and "ORIGINATING" in str(r[0]).upper():
+            header_idx = i
+            break
+    if header_idx < 0:
+        print("  WARNING: could not find NW Data header for branch enrichment")
+        return
+
+    # col 0 = Originating ID (FHA Branch ID), col 7 = Case Number
+    orig_to_cases: Dict[str, List[str]] = {}
+    for r in rows[header_idx + 1:]:
+        if not r or r[0] is None:
+            continue
+        orig_id = str(r[0]).strip()
+        case_num = str(r[7]).strip() if r[7] else None
+        if orig_id and case_num:
+            orig_to_cases.setdefault(orig_id, []).append(case_num)
+
+    case_to_info: Dict[str, dict] = {}
+    for loan in loans:
+        cn = loan.get("fha_case_number")
+        if cn:
+            case_to_info[cn] = {
+                "branch_name": loan.get("branch_name"),
+                "hud_office": loan.get("hud_office"),
+                "org_id": loan.get("org_id") or loan.get("branch_nmls_id"),
+            }
+
+    enriched = 0
+    for br in branch_rows:
+        fha_id = br["nmls_id"]
+        cases = orig_to_cases.get(fha_id, [])
+        if not cases:
+            continue
+
+        branch_names = set()
+        hud_offices = set()
+        org_ids = set()
+        for cn in cases:
+            info = case_to_info.get(cn)
+            if info:
+                if info["branch_name"]:
+                    branch_names.add(info["branch_name"])
+                if info["hud_office"]:
+                    hud_offices.add(info["hud_office"])
+                if info["org_id"]:
+                    org_ids.add(str(info["org_id"]))
+
+        br["afn_branch_names"] = sorted(branch_names) if branch_names else None
+        br["hud_offices"] = sorted(hud_offices) if hud_offices else None
+        br["afn_org_ids"] = sorted(org_ids) if org_ids else None
+        if branch_names:
+            if len(branch_names) == 1:
+                br["branch_name"] = list(branch_names)[0]
+            else:
+                br["branch_name"] = f"{len(branch_names)} AFN branches"
+            enriched += 1
+        if hud_offices:
+            if len(hud_offices) == 1:
+                br["hud_office"] = list(hud_offices)[0]
+            else:
+                br["hud_office"] = f"{len(hud_offices)} offices"
+
+    print(f"  Enriched {enriched}/{len(branch_rows)} HUD branches with AFN names")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1235,6 +1316,9 @@ def main() -> int:
     snapshot["compare_ratios_total"] = total_rows
     snapshot["compare_ratios_hoc"] = hoc_rows
     snapshot["compare_ratios_hud_office"] = field_rows
+    # ── Enrich branch rows with AFN names + HUD offices via case-number bridge ──
+    print("Enriching HUD branch rows with AFN branch names…")
+    _enrich_branch_rows(branch_rows, loans, nw2_path)
     snapshot["compare_ratios_branch"] = branch_rows
     snapshot["portfolio_slices"] = slices
     snapshot["loan_officer_performance"] = lo_perf

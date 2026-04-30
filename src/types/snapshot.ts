@@ -99,6 +99,9 @@ export interface CompareRatioBranch {
   nmls_id: string;
   branch_name: string | null;
   hud_office: string | null;
+  afn_branch_names: string[] | null;
+  hud_offices: string[] | null;
+  afn_org_ids: string[] | null;
   approval_status: 'A' | 'T' | null;
   loans_underwritten: number | null;
   delinquency_rate: number | null;
