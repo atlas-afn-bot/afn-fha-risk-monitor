@@ -1,6 +1,7 @@
 import { useMemo, useState, useCallback } from 'react';
-import { Users, GraduationCap, Handshake, Building, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, AlertTriangle, BarChart3, Activity } from 'lucide-react';
+import { Users, GraduationCap, Handshake, Building, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, AlertTriangle, BarChart3, Activity, Filter } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import SliderWithInput from '@/components/SliderWithInput';
 import type { Snapshot, Loan } from '@/types/snapshot';
 import type { DashboardData } from '@/lib/types';
 
@@ -114,28 +115,64 @@ function riskColor(dqRate: number): string {
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export default function DeepDive({ snapshot, data, subTab, onSubTabChange }: Props) {
+  const [minLoans, setMinLoans] = useState(1);
+
+  // Compute max loan count across all groupings for the slider range
+  const maxLoans = useMemo(() => {
+    const loans = snapshot.loans;
+    const counts: number[] = [];
+    // LO max
+    const loMap = groupBy(loans, l => l.loan_officer || l.lo_employee_id || 'Unknown');
+    for (const group of loMap.values()) counts.push(group.length);
+    // UW max
+    const uwMap = groupBy(loans, l => l.underwriter_enc || 'Unknown');
+    for (const group of uwMap.values()) counts.push(group.length);
+    // Broker max
+    const brokerLoans = loans.filter(l => l.broker);
+    const brokerMap = groupBy(brokerLoans, l => l.broker!);
+    for (const group of brokerMap.values()) counts.push(group.length);
+    // Branch max
+    const branchMap = groupBy(loans, l => l.branch_name || l.org_id || 'Unknown');
+    for (const group of branchMap.values()) counts.push(group.length);
+    return Math.max(...counts, 1);
+  }, [snapshot]);
+
   return (
     <Tabs value={subTab} onValueChange={v => onSubTabChange(v as DeepDiveSubTab)}>
-      <TabsList className="h-auto flex-wrap gap-1">
-        {SUB_TABS.map(s => (
-          <TabsTrigger key={s.id} value={s.id} className="gap-1.5">
-            <s.icon className="w-3.5 h-3.5" />
-            {s.label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+        <TabsList className="h-auto flex-wrap gap-1">
+          {SUB_TABS.map(s => (
+            <TabsTrigger key={s.id} value={s.id} className="gap-1.5">
+              <s.icon className="w-3.5 h-3.5" />
+              {s.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-1.5">
+          <Filter className="w-3.5 h-3.5 text-muted-foreground" />
+          <SliderWithInput
+            value={minLoans}
+            onChange={setMinLoans}
+            min={1}
+            max={Math.min(maxLoans, 500)}
+            step={1}
+            label="Min Loans:"
+            sliderClassName="w-32"
+          />
+        </div>
+      </div>
 
       <TabsContent value="lo">
-        {subTab === 'lo' && <LoanOfficerPanel snapshot={snapshot} />}
+        {subTab === 'lo' && <LoanOfficerPanel snapshot={snapshot} minLoans={minLoans} />}
       </TabsContent>
       <TabsContent value="uw">
-        {subTab === 'uw' && <UnderwriterPanel snapshot={snapshot} />}
+        {subTab === 'uw' && <UnderwriterPanel snapshot={snapshot} minLoans={minLoans} />}
       </TabsContent>
       <TabsContent value="tpo">
-        {subTab === 'tpo' && <TPOPanel snapshot={snapshot} />}
+        {subTab === 'tpo' && <TPOPanel snapshot={snapshot} minLoans={minLoans} />}
       </TabsContent>
       <TabsContent value="branch">
-        {subTab === 'branch' && <BranchPanel snapshot={snapshot} />}
+        {subTab === 'branch' && <BranchPanel snapshot={snapshot} minLoans={minLoans} />}
       </TabsContent>
     </Tabs>
   );
@@ -206,8 +243,8 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
 
 // ─── 1. Loan Officers (Enc Data only) ────────────────────────────────────────
 
-function LoanOfficerPanel({ snapshot }: { snapshot: Snapshot }) {
-  const rows = useMemo<LORow[]>(() => {
+function LoanOfficerPanel({ snapshot, minLoans }: { snapshot: Snapshot; minLoans: number }) {
+  const allRows = useMemo<LORow[]>(() => {
     const loans = snapshot.loans;
     const byLO = groupBy(loans, l => l.loan_officer || l.lo_employee_id || 'Unknown');
     const result: LORow[] = [];
@@ -229,6 +266,7 @@ function LoanOfficerPanel({ snapshot }: { snapshot: Snapshot }) {
     return result;
   }, [snapshot]);
 
+  const rows = useMemo(() => allRows.filter(r => r.loan_count >= minLoans), [allRows, minLoans]);
   const totalLoans = rows.reduce((s, r) => s + r.loan_count, 0);
   const totalDQ = rows.reduce((s, r) => s + r.dq_count, 0);
   const avgDQ = dqPct(totalDQ, totalLoans);
@@ -239,7 +277,7 @@ function LoanOfficerPanel({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPICard icon={Users} label="Loan Officers" value={rows.length} sub={`${totalLoans.toLocaleString()} total loans`} />
+        <KPICard icon={Users} label="Loan Officers" value={rows.length} sub={`${totalLoans.toLocaleString()} loans (${allRows.length} total, ${allRows.length - rows.length} filtered)`} />
         <KPICard icon={AlertTriangle} label="Total DQ" value={totalDQ} sub={fmtPct(avgDQ)} color="text-risk-red" />
         <KPICard icon={BarChart3} label="Avg FICO" value={fmtNum(avgField(snapshot.loans, 'fico_score'))} />
         <KPICard icon={Activity} label="Avg LTV" value={fmtPct(avgField(snapshot.loans, 'ltv'))} />
@@ -291,8 +329,8 @@ function LoanOfficerPanel({ snapshot }: { snapshot: Snapshot }) {
 
 // ─── 2. Underwriters (Enc Data only — underwriter_enc) ───────────────────────
 
-function UnderwriterPanel({ snapshot }: { snapshot: Snapshot }) {
-  const rows = useMemo<UWRow[]>(() => {
+function UnderwriterPanel({ snapshot, minLoans }: { snapshot: Snapshot; minLoans: number }) {
+  const allRows = useMemo<UWRow[]>(() => {
     const loans = snapshot.loans;
     const byUW = groupBy(loans, l => l.underwriter_enc || 'Unknown');
     const result: UWRow[] = [];
@@ -310,6 +348,7 @@ function UnderwriterPanel({ snapshot }: { snapshot: Snapshot }) {
     return result;
   }, [snapshot]);
 
+  const rows = useMemo(() => allRows.filter(r => r.loan_count >= minLoans), [allRows, minLoans]);
   const totalLoans = rows.reduce((s, r) => s + r.loan_count, 0);
   const totalDQ = rows.reduce((s, r) => s + r.dq_count, 0);
 
@@ -319,7 +358,7 @@ function UnderwriterPanel({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPICard icon={GraduationCap} label="Underwriters" value={rows.length} sub={`${totalLoans.toLocaleString()} total loans`} />
+        <KPICard icon={GraduationCap} label="Underwriters" value={rows.length} sub={`${totalLoans.toLocaleString()} loans (${allRows.length} total, ${allRows.length - rows.length} filtered)`} />
         <KPICard icon={AlertTriangle} label="Total DQ" value={totalDQ} sub={fmtPct(dqPct(totalDQ, totalLoans))} color="text-risk-red" />
         <KPICard icon={BarChart3} label="Avg FICO" value={fmtNum(avgField(snapshot.loans, 'fico_score'))} />
         <KPICard icon={Activity} label="Avg LTV" value={fmtPct(avgField(snapshot.loans, 'ltv'))} />
@@ -365,8 +404,8 @@ function UnderwriterPanel({ snapshot }: { snapshot: Snapshot }) {
 
 // ─── 3. TPO / Broker (Enc Data only — broker field) ──────────────────────────
 
-function TPOPanel({ snapshot }: { snapshot: Snapshot }) {
-  const rows = useMemo<BrokerRow[]>(() => {
+function TPOPanel({ snapshot, minLoans }: { snapshot: Snapshot; minLoans: number }) {
+  const allRows = useMemo<BrokerRow[]>(() => {
     // Only include loans that have a broker value (TPO/wholesale channel)
     const loans = snapshot.loans.filter(l => l.broker);
     const byBroker = groupBy(loans, l => l.broker!);
@@ -386,6 +425,7 @@ function TPOPanel({ snapshot }: { snapshot: Snapshot }) {
     return result;
   }, [snapshot]);
 
+  const rows = useMemo(() => allRows.filter(r => r.loan_count >= minLoans), [allRows, minLoans]);
   const totalLoans = rows.reduce((s, r) => s + r.loan_count, 0);
   const totalDQ = rows.reduce((s, r) => s + r.dq_count, 0);
 
@@ -395,7 +435,7 @@ function TPOPanel({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPICard icon={Handshake} label="Brokers" value={rows.length} sub={`${totalLoans.toLocaleString()} TPO loans`} />
+        <KPICard icon={Handshake} label="Brokers" value={rows.length} sub={`${totalLoans.toLocaleString()} TPO loans (${allRows.length} total, ${allRows.length - rows.length} filtered)`} />
         <KPICard icon={AlertTriangle} label="TPO DQ" value={totalDQ} sub={fmtPct(dqPct(totalDQ, totalLoans))} color="text-risk-red" />
         <KPICard icon={BarChart3} label="Avg FICO" value={fmtNum(avgField(snapshot.loans.filter(l => l.broker), 'fico_score'))} />
         <KPICard icon={Activity} label="Avg LTV" value={fmtPct(avgField(snapshot.loans.filter(l => l.broker), 'ltv'))} />
@@ -450,8 +490,8 @@ function TPOPanel({ snapshot }: { snapshot: Snapshot }) {
 
 // ─── 4. Branches (Enc Data only — branch_name + org_id) ──────────────────────
 
-function BranchPanel({ snapshot }: { snapshot: Snapshot }) {
-  const rows = useMemo<BranchRow[]>(() => {
+function BranchPanel({ snapshot, minLoans }: { snapshot: Snapshot; minLoans: number }) {
+  const allRows = useMemo<BranchRow[]>(() => {
     const loans = snapshot.loans;
     // Group by branch_name (fall back to org_id)
     const byBranch = groupBy(loans, l => l.branch_name || l.org_id || 'Unknown');
@@ -479,6 +519,7 @@ function BranchPanel({ snapshot }: { snapshot: Snapshot }) {
     return result;
   }, [snapshot]);
 
+  const rows = useMemo(() => allRows.filter(r => r.loan_count >= minLoans), [allRows, minLoans]);
   const totalLoans = rows.reduce((s, r) => s + r.loan_count, 0);
   const totalDQ = rows.reduce((s, r) => s + r.dq_count, 0);
   const avgDQ = dqPct(totalDQ, totalLoans);
@@ -489,7 +530,7 @@ function BranchPanel({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPICard icon={Building} label="Branches" value={rows.length} sub={`${totalLoans.toLocaleString()} total loans`} />
+        <KPICard icon={Building} label="Branches" value={rows.length} sub={`${totalLoans.toLocaleString()} loans (${allRows.length} total, ${allRows.length - rows.length} filtered)`} />
         <KPICard icon={AlertTriangle} label="Total DQ" value={totalDQ} sub={fmtPct(avgDQ)} color="text-risk-red" />
         <KPICard icon={BarChart3} label="Avg FICO" value={fmtNum(avgField(snapshot.loans, 'fico_score'))} />
         <KPICard icon={TrendingUp} label="Avg DPA %" value={fmtPct(dpaPct(snapshot.loans.filter(l => l.has_dpa).length, snapshot.loans.length))} />
