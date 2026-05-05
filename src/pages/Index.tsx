@@ -16,7 +16,6 @@ import DPAProviderTable from '@/components/DPAProviderTable';
 import ChannelAnalysis from '@/components/ChannelAnalysis';
 import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
-import RiskFactors from '@/components/RiskFactors';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import TabSummary from '@/components/TabSummary';
 import TerminationRiskCards from '@/components/TerminationRiskCards';
@@ -322,7 +321,7 @@ export default function Index() {
                     disabled={loading}
                   />
                   <button
-                    onClick={() => exportDashboardPDF(data, performancePeriod)}
+                    onClick={() => exportDashboardPDF(data, performancePeriod, selectedPeriod)}
                     className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                   >
                     <FileDown className="w-3.5 h-3.5" />
@@ -361,7 +360,6 @@ export default function Index() {
                     <>
                       <SummaryCards data={data} snapshot={snapshot} />
                       <ExecutiveSummary data={data} period={selectedPeriod} />
-                      <RiskFactors data={data} />
                       <TrendChart history={hudHistory} />
                       <AIInsights />
                       <PortfolioComposition data={data} />
