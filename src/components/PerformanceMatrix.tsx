@@ -16,12 +16,41 @@ function crBadge(val: number | null) {
   return <span className={cls}>{val}%</span>;
 }
 
-function dpaConBadge(val: number) {
-  const cls = val > 50 ? 'risk-badge-red' : val > 40 ? 'risk-badge-yellow' : 'risk-badge-green';
-  return <span className={cls}>{val.toFixed(0)}%</span>;
+/**
+ * Stacked SDQ% cell: shows original (top, gray, small), revised (middle, bold,
+ * color-coded by direction), and the absolute delta in percentage points
+ * (bottom, italic). Provides the audit chain Stefanie asked for — reviewers
+ * can see at a glance "removed N loans, SDQ% moved from X to Y, delta -Zpp."
+ */
+function StackedSDQCell({ original, revised, isFirst = false }: {
+  original: number | null;
+  revised: number | null;
+  isFirst?: boolean;
+}) {
+  const borderCls = isFirst ? 'border-l border-border' : '';
+  if (original === null || revised === null) {
+    return <td className={`matrix-cell ${borderCls}`}>-</td>;
+  }
+  const delta = revised - original;
+  const deltaAbs = Math.abs(delta);
+  const direction = deltaAbs < 0.01 ? 'flat' : delta < 0 ? 'down' : 'up';
+  const arrow = direction === 'down' ? '▼' : direction === 'up' ? '▲' : '—';
+  const revColor = direction === 'down' ? 'text-risk-green' : direction === 'up' ? 'text-risk-red' : 'text-foreground';
+  const deltaText = direction === 'flat'
+    ? '0.00pp'
+    : `${delta > 0 ? '+' : ''}${delta.toFixed(2)}pp`;
+  return (
+    <td className={`matrix-cell ${borderCls}`}>
+      <div className="flex flex-col items-center leading-tight">
+        <span className="text-xs text-muted-foreground">{original.toFixed(2)}%</span>
+        <span className={`font-semibold ${revColor}`}>{revised.toFixed(2)}% {arrow}</span>
+        <span className="text-[10px] italic text-muted-foreground">{deltaText}</span>
+      </div>
+    </td>
+  );
 }
 
-type SortKey = 'name' | 'totalCR' | 'retailCR' | 'wsCR' | 'totalLoans' | 'totalDLQ' | 'retailDPAConc' | 'wsDPAConc' | 'revisedTotalCR';
+type SortKey = 'name' | 'totalCR' | 'retailCR' | 'wsCR' | 'totalLoans' | 'totalDLQ' | 'revisedTotalCR';
 
 export default function PerformanceMatrix({ offices, title, emoji, filterFn, maxRows }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('totalCR');
@@ -45,7 +74,7 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
   };
 
   const exportCSV = () => {
-    const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Rev Total SDQ%','Rev Retail SDQ%','Rev WS SDQ%','Rev Total','Rev Retail','Rev WS','R DPA%','WS DPA%'];
+    const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Total SDQ%','Retail SDQ%','WS SDQ%','Rev Total SDQ%','Rev Retail SDQ%','Rev WS SDQ%','Rev Total CR','Rev Retail CR','Rev WS CR'];
     const rows = filtered.map(o => [
       o.name,o.totalCR,o.retailCR??'',o.wsCR??'',
       o.totalLoans,o.retailLoans,o.wsLoans,
@@ -53,11 +82,13 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
       o.retailNonDPADLQ,o.retailBoostDLQ,o.retailOtherDPADLQ,
       o.wsNonDPADLQ,o.wsBoostDLQ,o.wsOtherDPADLQ,
       o.retailRemoved,o.wsRemoved,
+      o.totalDQPct.toFixed(2),
+      o.retailDQPct !== null ? o.retailDQPct.toFixed(2) : '',
+      o.wsDQPct !== null ? o.wsDQPct.toFixed(2) : '',
       o.revisedTotalDQPct.toFixed(2),
       o.revisedRetailDQPct !== null ? o.revisedRetailDQPct.toFixed(2) : '',
       o.revisedWSDQPct !== null ? o.revisedWSDQPct.toFixed(2) : '',
       o.revisedTotalCR,o.revisedRetailCR??'',o.revisedWSCR??'',
-      o.retailDPAConc.toFixed(1),o.wsDPAConc.toFixed(1),
     ].join(','));
     const csv = [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -95,7 +126,6 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header text-center border-l border-border" colSpan={3}>WS DLQ Breakdown</th>
               <th className="matrix-header text-center border-l border-border" colSpan={2}>Enhanced Guidelines</th>
               <th className="matrix-header text-center border-l border-border" colSpan={6}>Revised Ratios</th>
-              <th className="matrix-header text-center border-l border-border" colSpan={2}>DPA Conc.</th>
             </tr>
             <tr className="border-b border-border">
               <SortHeader label="Office" sk="name" className="text-left" />
@@ -122,8 +152,6 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <SortHeader label="Total CR" sk="revisedTotalCR" className="border-l border-border" />
               <th className="matrix-header">Retail CR</th>
               <th className="matrix-header">WS CR</th>
-              <SortHeader label="Retail" sk="retailDPAConc" className="border-l border-border" />
-              <SortHeader label="WS" sk="wsDPAConc" />
             </tr>
           </thead>
           <tbody>
@@ -147,14 +175,12 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
                 <td className="matrix-cell">{o.wsOtherDPADLQ}</td>
                 <td className="matrix-cell border-l border-border text-risk-red">{o.retailRemoved}</td>
                 <td className="matrix-cell text-risk-red">{o.wsRemoved}</td>
-                <td className="matrix-cell border-l border-border">{o.revisedTotalDQPct.toFixed(2)}%</td>
-                <td className="matrix-cell">{o.revisedRetailDQPct !== null ? `${o.revisedRetailDQPct.toFixed(2)}%` : '-'}</td>
-                <td className="matrix-cell">{o.revisedWSDQPct !== null ? `${o.revisedWSDQPct.toFixed(2)}%` : '-'}</td>
+                <StackedSDQCell original={o.totalDQPct} revised={o.revisedTotalDQPct} isFirst />
+                <StackedSDQCell original={o.retailDQPct} revised={o.revisedRetailDQPct} />
+                <StackedSDQCell original={o.wsDQPct} revised={o.revisedWSDQPct} />
                 <td className="matrix-cell border-l border-border">{crBadge(o.revisedTotalCR)}</td>
                 <td className="matrix-cell">{crBadge(o.revisedRetailCR)}</td>
                 <td className="matrix-cell">{crBadge(o.revisedWSCR)}</td>
-                <td className="matrix-cell border-l border-border">{dpaConBadge(o.retailDPAConc)}</td>
-                <td className="matrix-cell">{dpaConBadge(o.wsDPAConc)}</td>
               </tr>
             ))}
           </tbody>

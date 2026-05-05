@@ -67,6 +67,12 @@ export interface OfficeSummary {
   wsOtherDPADLQ: number;
   retailRemoved: number;
   wsRemoved: number;
+  // Original SDQ% (numerator of original CR formula).
+  // Surfaced for committee audit alongside revised values so reviewers can
+  // validate the delta ("we removed N loans, SDQ% moved from X to Y").
+  totalDQPct: number;
+  retailDQPct: number | null;
+  wsDQPct: number | null;
   // Revised SDQ% (numerator of Revised CR formula)
   // Surfaced for committee audit — they validate against this before the final CR.
   revisedTotalDQPct: number;

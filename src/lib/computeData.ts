@@ -149,6 +149,16 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
     const retailDLQ = retail.filter(l => l.isDelinquent).length;
     const wsDLQ = ws.filter(l => l.isDelinquent).length;
 
+    // Original SDQ% (numerator of original CR). Computed once here so the
+    // HUD-data and fallback branches both surface identical originals to the
+    // committee audit (the originals don't depend on HUD area DQ%, only on
+    // Encompass-derived counts). dqRate below is mathematically equivalent to
+    // totalDQPct but kept independently for backward compatibility with other
+    // consumers.
+    const totalDQPct = total > 0 ? (totalDLQ / total) * 100 : 0;
+    const retailDQPct = retail.length > 0 ? (retailDLQ / retail.length) * 100 : null;
+    const wsDQPct = ws.length > 0 ? (wsDLQ / ws.length) * 100 : null;
+
     // Use HUD data for compare ratios if available, else fall back to Excel column / estimate
     const hudEntry = hudMap.get(name.toUpperCase().trim());
     let totalCR: number;
@@ -261,6 +271,7 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
       retailNonDPADLQ, retailBoostDLQ, retailOtherDPADLQ,
       wsNonDPADLQ, wsBoostDLQ, wsOtherDPADLQ,
       retailRemoved, wsRemoved,
+      totalDQPct, retailDQPct, wsDQPct,
       revisedTotalDQPct, revisedRetailDQPct, revisedWSDQPct,
       revisedTotalCR, revisedRetailCR, revisedWSCR,
       retailDPAConc, wsDPAConc,
