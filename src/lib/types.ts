@@ -67,6 +67,11 @@ export interface OfficeSummary {
   wsOtherDPADLQ: number;
   retailRemoved: number;
   wsRemoved: number;
+  // Revised SDQ% (numerator of Revised CR formula)
+  // Surfaced for committee audit — they validate against this before the final CR.
+  revisedTotalDQPct: number;
+  revisedRetailDQPct: number | null;
+  revisedWSDQPct: number | null;
   revisedTotalCR: number;
   revisedRetailCR: number | null;
   revisedWSCR: number | null;

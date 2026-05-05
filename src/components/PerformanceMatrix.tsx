@@ -45,8 +45,20 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
   };
 
   const exportCSV = () => {
-    const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Rev Total','Rev Retail','Rev WS','R DPA%','WS DPA%'];
-    const rows = filtered.map(o => [o.name,o.totalCR,o.retailCR??'',o.wsCR??'',o.totalLoans,o.retailLoans,o.wsLoans,o.totalDLQ,o.retailDLQ,o.wsDLQ,o.retailNonDPADLQ,o.retailBoostDLQ,o.retailOtherDPADLQ,o.wsNonDPADLQ,o.wsBoostDLQ,o.wsOtherDPADLQ,o.retailRemoved,o.wsRemoved,o.revisedTotalCR,o.revisedRetailCR??'',o.revisedWSCR??'',o.retailDPAConc.toFixed(1),o.wsDPAConc.toFixed(1)].join(','));
+    const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Rev Total SDQ%','Rev Retail SDQ%','Rev WS SDQ%','Rev Total','Rev Retail','Rev WS','R DPA%','WS DPA%'];
+    const rows = filtered.map(o => [
+      o.name,o.totalCR,o.retailCR??'',o.wsCR??'',
+      o.totalLoans,o.retailLoans,o.wsLoans,
+      o.totalDLQ,o.retailDLQ,o.wsDLQ,
+      o.retailNonDPADLQ,o.retailBoostDLQ,o.retailOtherDPADLQ,
+      o.wsNonDPADLQ,o.wsBoostDLQ,o.wsOtherDPADLQ,
+      o.retailRemoved,o.wsRemoved,
+      o.revisedTotalDQPct.toFixed(2),
+      o.revisedRetailDQPct !== null ? o.revisedRetailDQPct.toFixed(2) : '',
+      o.revisedWSDQPct !== null ? o.revisedWSDQPct.toFixed(2) : '',
+      o.revisedTotalCR,o.revisedRetailCR??'',o.revisedWSCR??'',
+      o.retailDPAConc.toFixed(1),o.wsDPAConc.toFixed(1),
+    ].join(','));
     const csv = [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -82,7 +94,7 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header text-center border-l border-border" colSpan={3}>Retail DLQ Breakdown</th>
               <th className="matrix-header text-center border-l border-border" colSpan={3}>WS DLQ Breakdown</th>
               <th className="matrix-header text-center border-l border-border" colSpan={2}>Enhanced Guidelines</th>
-              <th className="matrix-header text-center border-l border-border" colSpan={3}>Revised Ratios</th>
+              <th className="matrix-header text-center border-l border-border" colSpan={6}>Revised Ratios</th>
               <th className="matrix-header text-center border-l border-border" colSpan={2}>DPA Conc.</th>
             </tr>
             <tr className="border-b border-border">
@@ -104,9 +116,12 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header">Other</th>
               <th className="matrix-header border-l border-border">R Rmvd</th>
               <th className="matrix-header">WS Rmvd</th>
-              <SortHeader label="Total" sk="revisedTotalCR" className="border-l border-border" />
-              <th className="matrix-header">Retail</th>
-              <th className="matrix-header">WS</th>
+              <th className="matrix-header border-l border-border">Total<br/>SDQ%</th>
+              <th className="matrix-header">Retail<br/>SDQ%</th>
+              <th className="matrix-header">WS<br/>SDQ%</th>
+              <SortHeader label="Total CR" sk="revisedTotalCR" className="border-l border-border" />
+              <th className="matrix-header">Retail CR</th>
+              <th className="matrix-header">WS CR</th>
               <SortHeader label="Retail" sk="retailDPAConc" className="border-l border-border" />
               <SortHeader label="WS" sk="wsDPAConc" />
             </tr>
@@ -132,6 +147,9 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
                 <td className="matrix-cell">{o.wsOtherDPADLQ}</td>
                 <td className="matrix-cell border-l border-border text-risk-red">{o.retailRemoved}</td>
                 <td className="matrix-cell text-risk-red">{o.wsRemoved}</td>
+                <td className="matrix-cell border-l border-border">{o.revisedTotalDQPct.toFixed(2)}%</td>
+                <td className="matrix-cell">{o.revisedRetailDQPct !== null ? `${o.revisedRetailDQPct.toFixed(2)}%` : '-'}</td>
+                <td className="matrix-cell">{o.revisedWSDQPct !== null ? `${o.revisedWSDQPct.toFixed(2)}%` : '-'}</td>
                 <td className="matrix-cell border-l border-border">{crBadge(o.revisedTotalCR)}</td>
                 <td className="matrix-cell">{crBadge(o.revisedRetailCR)}</td>
                 <td className="matrix-cell">{crBadge(o.revisedWSCR)}</td>

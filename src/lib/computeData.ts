@@ -192,6 +192,12 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
     let revisedTotalCR: number;
     let revisedRetailCR: number | null;
     let revisedWSCR: number | null;
+    // Revised SDQ% (numerator of Revised CR) — surfaced on OfficeSummary for
+    // committee audit. Computed in both branches below so the column always
+    // populates whether or not HUD data is available.
+    let revisedTotalDQPct: number;
+    let revisedRetailDQPct: number | null;
+    let revisedWSDQPct: number | null;
 
     if (hudEntry) {
       // Committee methodology: remove Enhanced Guidelines loans from BOTH
@@ -206,22 +212,35 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
       const totalRemoved = retailRemoved + wsRemoved;
       const revisedTotalLoans = total - totalRemoved;
       const revisedTotalDLQCount = totalDLQ - totalRemoved;
-      const revisedTotalDQPct = revisedTotalLoans > 0 ? (revisedTotalDLQCount / revisedTotalLoans) * 100 : 0;
+      revisedTotalDQPct = revisedTotalLoans > 0 ? (revisedTotalDLQCount / revisedTotalLoans) * 100 : 0;
       revisedTotalCR = hudAreaDQPct > 0 ? Math.round(revisedTotalDQPct / hudAreaDQPct * 100) : totalCR;
 
       // Revised retail: remove retail removed from both num & denom
       const revisedRetailLoans = retail.length - retailRemoved;
       const revisedRetailDLQCount = retailDLQ - retailRemoved;
-      const revisedRetailDQPct = revisedRetailLoans > 0 ? (revisedRetailDLQCount / revisedRetailLoans) * 100 : 0;
-      revisedRetailCR = areaRetailDQ > 0 && revisedRetailLoans > 0 ? Math.round(revisedRetailDQPct / areaRetailDQ * 100) : retailCR;
+      const retailDQPct = revisedRetailLoans > 0 ? (revisedRetailDLQCount / revisedRetailLoans) * 100 : 0;
+      revisedRetailDQPct = revisedRetailLoans > 0 ? retailDQPct : null;
+      revisedRetailCR = areaRetailDQ > 0 && revisedRetailLoans > 0 ? Math.round(retailDQPct / areaRetailDQ * 100) : retailCR;
 
       // Revised WS: remove ws removed from both num & denom
       const revisedWSLoans = ws.length - wsRemoved;
       const revisedWSDLQCount = wsDLQ - wsRemoved;
-      const revisedWSDQPct = revisedWSLoans > 0 ? (revisedWSDLQCount / revisedWSLoans) * 100 : 0;
-      revisedWSCR = areaWSDQ > 0 && revisedWSLoans > 0 ? Math.round(revisedWSDQPct / areaWSDQ * 100) : wsCR;
+      const wsDQPct = revisedWSLoans > 0 ? (revisedWSDLQCount / revisedWSLoans) * 100 : 0;
+      revisedWSDQPct = revisedWSLoans > 0 ? wsDQPct : null;
+      revisedWSCR = areaWSDQ > 0 && revisedWSLoans > 0 ? Math.round(wsDQPct / areaWSDQ * 100) : wsCR;
     } else {
-      // No HUD data — fall back to proportional scaling
+      // No HUD data — fall back to proportional scaling for the CR, but still
+      // compute the SDQ% from the same removed-loan math so the audit column
+      // populates consistently with the HUD-data branch.
+      const totalRemoved = retailRemoved + wsRemoved;
+      const revisedTotalLoans = total - totalRemoved;
+      const revisedTotalDLQCount = totalDLQ - totalRemoved;
+      revisedTotalDQPct = revisedTotalLoans > 0 ? (revisedTotalDLQCount / revisedTotalLoans) * 100 : 0;
+      const revisedRetailLoans = retail.length - retailRemoved;
+      revisedRetailDQPct = revisedRetailLoans > 0 ? ((retailDLQ - retailRemoved) / revisedRetailLoans) * 100 : null;
+      const revisedWSLoans = ws.length - wsRemoved;
+      revisedWSDQPct = revisedWSLoans > 0 ? ((wsDLQ - wsRemoved) / revisedWSLoans) * 100 : null;
+
       revisedTotalCR = totalDLQ > 0 ? Math.round(totalCR * (revisedTotalDLQ / totalDLQ)) : totalCR;
       revisedRetailCR = retailCR !== null && retailDLQ > 0 ? Math.round(retailCR * ((retailDLQ - retailRemoved) / retailDLQ)) : retailCR;
       revisedWSCR = wsCR !== null && wsDLQ > 0 ? Math.round(wsCR * ((wsDLQ - wsRemoved) / wsDLQ)) : wsCR;
@@ -242,6 +261,7 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
       retailNonDPADLQ, retailBoostDLQ, retailOtherDPADLQ,
       wsNonDPADLQ, wsBoostDLQ, wsOtherDPADLQ,
       retailRemoved, wsRemoved,
+      revisedTotalDQPct, revisedRetailDQPct, revisedWSDQPct,
       revisedTotalCR, revisedRetailCR, revisedWSCR,
       retailDPAConc, wsDPAConc,
       dqRate: total > 0 ? (totalDLQ / total) * 100 : 0,
