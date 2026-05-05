@@ -16,7 +16,14 @@ export interface LoanRecord {
   DPAName: string;
   /** High-level DPA program bucket ("Boost", "Arrive/Aurora", "Non-DPA"). */
   DPAProgram: string;
-  /** DPA investor / funding source ("AFN", "Orion Lending", "United Security Financial Corp", …). */
+  /**
+   * End-investor / funding source — sourced from the loan's `investor_name`
+   * field (e.g. "GNMA", "Lakeview/Bayview"). Previously this was sourced
+   * from `dpa_investor`, but that column carries internal codes ("AFN" for
+   * Boost loans whose true investor is GNMA) and is blank for the majority
+   * of loans. `investor_name` is what the committee uses; downstream
+   * displays fall back to "Unassigned" when this is blank.
+   */
   DPAInvestor: string;
   FICO: number;
   Units: string;
@@ -167,6 +174,13 @@ export interface DashboardData {
   overallDQRate: number;
   terminationRiskCount: number;
   dpaPortfolioConc: number;
+  /** Portfolio-level HUD Compare Ratio — Total scope (sourced from
+   *  snapshot.compare_ratios_total[scope=='total']). */
+  overallCR: number | null;
+  /** Portfolio-level HUD Compare Ratio — Retail scope. */
+  retailCR: number | null;
+  /** Portfolio-level HUD Compare Ratio — Wholesale (sponsor) scope. */
+  wholesaleCR: number | null;
   offices: OfficeSummary[];
   /** Primary DPA analytics — grouped by DPA Program with investor drill-down. */
   dpaPrograms: DPAProgramSummary[];

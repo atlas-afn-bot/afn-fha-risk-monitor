@@ -16,6 +16,7 @@ import DPAProviderTable from '@/components/DPAProviderTable';
 import ChannelAnalysis from '@/components/ChannelAnalysis';
 import FICODistribution from '@/components/FICODistribution';
 import RiskFactorCharts from '@/components/RiskFactorCharts';
+import RiskFactors from '@/components/RiskFactors';
 import ExecutiveSummary from '@/components/ExecutiveSummary';
 import TabSummary from '@/components/TabSummary';
 import TerminationRiskCards from '@/components/TerminationRiskCards';
@@ -360,6 +361,7 @@ export default function Index() {
                     <>
                       <SummaryCards data={data} snapshot={snapshot} />
                       <ExecutiveSummary data={data} period={selectedPeriod} />
+                      <RiskFactors data={data} />
                       <TrendChart history={hudHistory} />
                       <AIInsights />
                       <PortfolioComposition data={data} />

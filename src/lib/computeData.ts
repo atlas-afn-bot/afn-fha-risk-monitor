@@ -2,6 +2,44 @@ import type { ParsedLoan, DashboardData, OfficeSummary, DPAProgramSummary, DPAIn
 import type { Snapshot, Loan as SnapshotLoan, CompareRatioHudOffice } from '@/types/snapshot';
 
 /**
+ * Canonical termination-risk predicate.
+ *
+ * An office is flagged for termination risk when its compare ratio is above
+ * 200% with a non-trivial book (>100 loans). HUD evaluates each office
+ * independently, so this is the threshold that drives the committee's
+ * top-of-page summary.
+ *
+ * Exported so PDF and dashboard surfaces share one source of truth
+ * (Twyla feedback PR-2 #16 — the PDF previously diverged on a stricter
+ * filter, which produced inconsistent counts between the two views).
+ */
+export function isTerminationRiskOffice(o: OfficeSummary): boolean {
+  return o.totalCR > 200 && o.totalLoans > 100;
+}
+
+/**
+ * Canonical credit-watch predicate.
+ *
+ * Three branches, all inclusive:
+ *   1. CR > 150% and <= 200% with >= 100 loans (the classic "sized credit
+ *      watch" bucket).
+ *   2. CR > 200% but with < 100 loans (high CR, small book — not a
+ *      termination candidate yet but still needs monitoring).
+ *   3. CR > 150% with < 100 loans (any small-book office trending hot).
+ *
+ * Mirrors the dashboard's ExecutiveSummary count exactly. Per Michael's
+ * directive (PR-2 #16), the PDF must use the identical predicate; do not
+ * branch this filter without updating both surfaces simultaneously.
+ */
+export function isCreditWatchOffice(o: OfficeSummary): boolean {
+  return (
+    (o.totalCR > 150 && o.totalCR <= 200 && o.totalLoans >= 100) ||
+    (o.totalCR > 200 && o.totalLoans < 100) ||
+    (o.totalCR > 150 && o.totalLoans < 100)
+  );
+}
+
+/**
  * Primary entry point for the dashboard — takes a parsed monthly snapshot
  * (as loaded by `snapshotLoader.ts`) and returns the same `DashboardData`
  * shape the existing components consume.
@@ -23,6 +61,16 @@ export function buildDashboardFromSnapshot(snapshot: Snapshot): DashboardData {
   dashboard.delinquencyReasonRollup = snapshot.delinquency_reason_rollup;
   dashboard.indemnificationLoans = snapshot.indemnification_loans;
   dashboard.sponsorTPODetail = snapshot.sponsor_tpo_detail;
+
+  // Portfolio-level HUD compare ratios (Total / Retail / Sponsor).
+  // Surfaced on DashboardData so the PDF Total CR slot populates instead of
+  // rendering blank (Twyla feedback PR-2 #1).
+  const totalRow = snapshot.compare_ratios_total.find(r => r.scope === 'total');
+  const retailRow = snapshot.compare_ratios_total.find(r => r.scope === 'retail');
+  const sponsorRow = snapshot.compare_ratios_total.find(r => r.scope === 'sponsor');
+  dashboard.overallCR = totalRow?.compare_ratio ?? null;
+  dashboard.retailCR = retailRow?.compare_ratio ?? null;
+  dashboard.wholesaleCR = sponsorRow?.compare_ratio ?? null;
   return dashboard;
 }
 
@@ -45,7 +93,14 @@ function snapshotLoanToParsed(l: SnapshotLoan): ParsedLoan {
     LoanProgram: l.loan_program_raw ?? '',
     DPAName: l.dpa_name ?? '',
     DPAProgram: l.dpa_program ?? '',
-    DPAInvestor: l.dpa_investor ?? '',
+    // Use end-investor (investor_name) instead of dpa_investor.
+    // dpa_investor sometimes shows internal codes (e.g. 'AFN' for Boost loans
+    // whose actual GNMA buyer is captured in investor_name) and is blank for
+    // ~70% of the portfolio. investor_name is the field Twyla and the
+    // committee actually use; we fall back to a literal 'Unassigned' label
+    // when investor_name itself is blank rather than reaching back to the
+    // unreliable dpa_investor column.
+    DPAInvestor: l.investor_name ?? '',
     FICO: l.fico_score ?? 0,
     Units: l.units != null ? String(l.units) : '',
     AUSType: l.aus ?? '',
@@ -105,6 +160,9 @@ export function computeDashboard(loans: ParsedLoan[], hudData?: HUDOfficeCR[]): 
     overallDQRate,
     terminationRiskCount,
     dpaPortfolioConc,
+    overallCR: null,
+    retailCR: null,
+    wholesaleCR: null,
     offices,
     dpaPrograms: computeDPAPrograms(loans),
     dpaMatrix: computeDPAMatrix(loans),

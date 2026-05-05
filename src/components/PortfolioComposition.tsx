@@ -7,9 +7,13 @@ const COLORS = ['hsl(213, 80%, 50%)', 'hsl(354, 70%, 54%)'];
 
 export default function PortfolioComposition({ data }: Props) {
   const { programComposition: pc, totalLoans } = data;
+  // Renamed from "DPA Third-Party" → "DPA" per Twyla (PR-2 #15). The
+  // "Third-Party" qualifier was internal-categorization noise; committee
+  // readers and the underlying programComposition only distinguish DPA
+  // vs Standard FHA.
   const pieData = [
     { name: 'Standard FHA', value: pc.standard, pct: ((pc.standard / totalLoans) * 100).toFixed(1) },
-    { name: 'DPA Third-Party', value: pc.dpa, pct: ((pc.dpa / totalLoans) * 100).toFixed(1) },
+    { name: 'DPA', value: pc.dpa, pct: ((pc.dpa / totalLoans) * 100).toFixed(1) },
   ];
 
   const barData = [
