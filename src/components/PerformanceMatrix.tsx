@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { ArrowUpDown, Download } from 'lucide-react';
+import { useMemo } from 'react';
+import { Download } from 'lucide-react';
 import type { OfficeSummary } from '@/lib/types';
 
 interface Props {
@@ -50,28 +50,13 @@ function StackedSDQCell({ original, revised, isFirst = false }: {
   );
 }
 
-type SortKey = 'name' | 'totalCR' | 'retailCR' | 'wsCR' | 'totalLoans' | 'totalDLQ' | 'revisedTotalCR';
-
 export default function PerformanceMatrix({ offices, title, emoji, filterFn, maxRows }: Props) {
-  const [sortKey, setSortKey] = useState<SortKey>('totalCR');
-  const [sortDesc, setSortDesc] = useState(true);
-
   const filtered = useMemo(() => {
     let arr = offices.filter(filterFn);
-    arr.sort((a, b) => {
-      const av = a[sortKey] ?? -1;
-      const bv = b[sortKey] ?? -1;
-      if (typeof av === 'string') return sortDesc ? (bv as string).localeCompare(av) : av.localeCompare(bv as string);
-      return sortDesc ? (bv as number) - (av as number) : (av as number) - (bv as number);
-    });
+    arr.sort((a, b) => (b.totalCR ?? -1) - (a.totalCR ?? -1));
     if (maxRows) arr = arr.slice(0, maxRows);
     return arr;
-  }, [offices, filterFn, sortKey, sortDesc, maxRows]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) setSortDesc(!sortDesc);
-    else { setSortKey(key); setSortDesc(true); }
-  };
+  }, [offices, filterFn, maxRows]);
 
   const exportCSV = () => {
     const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Total SDQ%','Retail SDQ%','WS SDQ%','Rev Total SDQ%','Rev Retail SDQ%','Rev WS SDQ%','Rev Total CR','Rev Retail CR','Rev WS CR'];
@@ -98,12 +83,6 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
     a.click();
   };
 
-  const SortHeader = ({ label, sk, className = '' }: { label: string; sk: SortKey; className?: string }) => (
-    <th className={`matrix-header cursor-pointer hover:text-foreground whitespace-nowrap ${className}`} onClick={() => toggleSort(sk)}>
-      {label} <ArrowUpDown className="inline w-3 h-3 ml-0.5" />
-    </th>
-  );
-
   if (filtered.length === 0) return null;
 
   return (
@@ -128,14 +107,14 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header text-center border-l border-border" colSpan={6}>Revised Ratios</th>
             </tr>
             <tr className="border-b border-border">
-              <SortHeader label="Office" sk="name" className="text-left" />
-              <SortHeader label="Total" sk="totalCR" className="border-l border-border" />
-              <SortHeader label="Retail" sk="retailCR" />
-              <SortHeader label="WS" sk="wsCR" />
-              <SortHeader label="Total" sk="totalLoans" className="border-l border-border" />
+              <th className="matrix-header whitespace-nowrap text-left">Office</th>
+              <th className="matrix-header whitespace-nowrap border-l border-border">Total</th>
+              <th className="matrix-header whitespace-nowrap">Retail</th>
+              <th className="matrix-header whitespace-nowrap">WS</th>
+              <th className="matrix-header whitespace-nowrap border-l border-border">Total</th>
               <th className="matrix-header">Retail</th>
               <th className="matrix-header">WS</th>
-              <SortHeader label="Total" sk="totalDLQ" className="border-l border-border" />
+              <th className="matrix-header whitespace-nowrap border-l border-border">Total</th>
               <th className="matrix-header">Retail</th>
               <th className="matrix-header">WS</th>
               <th className="matrix-header border-l border-border">Non-DPA</th>
@@ -149,7 +128,7 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header border-l border-border">Total<br/>SDQ%</th>
               <th className="matrix-header">Retail<br/>SDQ%</th>
               <th className="matrix-header">WS<br/>SDQ%</th>
-              <SortHeader label="Total CR" sk="revisedTotalCR" className="border-l border-border" />
+              <th className="matrix-header whitespace-nowrap border-l border-border">Total CR</th>
               <th className="matrix-header">Retail CR</th>
               <th className="matrix-header">WS CR</th>
             </tr>
