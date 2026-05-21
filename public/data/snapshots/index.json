@@ -1,6 +1,13 @@
 {
   "periods": [
     {
+      "period": "2026-04",
+      "label": "April 2026",
+      "performance_period": "2026-04-30",
+      "generated_at": "2026-05-21T00:21:00Z",
+      "file": "2026-04.json"
+    },
+    {
       "period": "2026-03",
       "label": "March 2026",
       "performance_period": "2026-03-31",
@@ -15,6 +22,6 @@
       "file": "2026-02.json"
     }
   ],
-  "updated_at": "2026-04-30T14:45:20Z",
+  "updated_at": "2026-05-21T00:21:01Z",
   "schema_version": 1
 }
