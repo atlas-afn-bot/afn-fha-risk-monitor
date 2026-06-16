@@ -32,6 +32,7 @@ import {
 
 const ALLOWED_EMAILS = new Set<string>([
   'jdewindt@afncorp.com',
+  'juliandomingo@afncorp.com',
   'mkunisaki@afncorp.com',
   'stallman@afncorp.com',
 ]);

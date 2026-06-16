@@ -33,6 +33,7 @@ const {
 // Authorized uploaders (lowercased). Defense-in-depth allowlist.
 const ALLOWED_EMAILS = new Set([
   'jdewindt@afncorp.com',
+  'juliandomingo@afncorp.com',
   'mkunisaki@afncorp.com',
   'stallman@afncorp.com',
 ]);

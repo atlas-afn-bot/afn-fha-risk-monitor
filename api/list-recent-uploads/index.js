@@ -8,6 +8,7 @@ const { BlobServiceClient } = require('@azure/storage-blob');
 
 const ALLOWED_EMAILS = new Set([
   'jdewindt@afncorp.com',
+  'juliandomingo@afncorp.com',
   'mkunisaki@afncorp.com',
   'stallman@afncorp.com',
 ]);
