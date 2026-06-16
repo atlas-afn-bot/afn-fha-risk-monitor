@@ -24,6 +24,20 @@
       "allowedRoles": ["anonymous", "authenticated"]
     },
     {
+      "route": "/api/upload-sas",
+      "allowedRoles": ["authenticated"],
+      "methods": ["POST"]
+    },
+    {
+      "route": "/api/list-recent-uploads",
+      "allowedRoles": ["authenticated"],
+      "methods": ["GET"]
+    },
+    {
+      "route": "/uploads",
+      "allowedRoles": ["authenticated"]
+    },
+    {
       "route": "/*",
       "allowedRoles": [
         "authenticated"

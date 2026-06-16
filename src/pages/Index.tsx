@@ -29,12 +29,20 @@ import BranchCompareRatios, {
 } from '@/components/tabs/BranchCompareRatios';
 import DeepDive, { type DeepDiveSubTab } from '@/components/tabs/DeepDive';
 import Delinquencies from '@/components/tabs/Delinquencies';
+import FileUploads from '@/components/tabs/FileUploads';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
   Moon, Sun, FileDown, Loader2, AlertTriangle,
 } from 'lucide-react';
 
-type TabId = 'overview' | 'hud-offices' | 'hoc' | 'branches-hud' | 'deep-dive' | 'delinquencies';
+type TabId =
+  | 'overview'
+  | 'hud-offices'
+  | 'hoc'
+  | 'branches-hud'
+  | 'deep-dive'
+  | 'delinquencies'
+  | 'uploads';
 
 const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
   { id: 'overview',     emoji: '📊', label: 'Overview' },
@@ -43,6 +51,7 @@ const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
   { id: 'branches-hud', emoji: '🏬', label: 'Branch Compare Ratios' },
   { id: 'deep-dive',    emoji: '👥', label: 'Loan Data Deep Dive' },
   { id: 'delinquencies', emoji: '⚠️', label: 'Delinquencies' },
+  { id: 'uploads',      emoji: '📤', label: 'File Uploads' },
 ];
 
 const VALID_TABS = new Set<TabId>(TAB_DEFS.map(t => t.id));
@@ -433,6 +442,15 @@ export default function Index() {
                     <div className="space-y-6">
                       <TabSummary tabId="delinquencies" snapshot={snapshot} data={data} />
                       <Delinquencies snapshot={snapshot} data={data} />
+                    </div>
+                  )}
+                </TabsContent>
+
+                {/* File Uploads — drop-zone backed by Azure Blob Storage. */}
+                <TabsContent value="uploads">
+                  {visited.has('uploads') && (
+                    <div className="space-y-6">
+                      <FileUploads />
                     </div>
                   )}
                 </TabsContent>
