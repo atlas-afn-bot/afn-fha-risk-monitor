@@ -698,6 +698,15 @@ def build_loans(enc_path: Path, nw2_path: Path,
             "tpo_broker_flag": _clean_str(row.get("TPO Broker")),
             "funded_date": _iso_date(row.get("Fund Date")),
             "closed_date": _iso_date(row.get("Closed Date")),
+            # Encompass Data Tab, column BB ("First Pymt Date"). Drives the
+            # "Proposed Drop-Off (Next 3 Mo)" column — we use this date as a
+            # proxy for HUD's "beginning amortization date" rolling 24-month
+            # window. Loans whose First Payment Date is older than
+            # (current window start + 3 months) are projected to drop off the
+            # office's HUD CR denominator.
+            "first_payment_date": _iso_date(
+                row.get("First Pymt Date") or row.get("First Payment Date")
+            ),
             "lien_position": _clean_str(row.get("Lien Position")),
             "borrower_count": _clean_int(row.get("Borrower Count")),
             "total_income": _clean_num(row.get("Total Income")),
@@ -710,15 +719,56 @@ def build_loans(enc_path: Path, nw2_path: Path,
     return loans
 
 
+# Excel "1900-date-system" epoch: serial 1 = 1900-01-01, but Excel mistakenly
+# treats 1900 as a leap year, so serial 60 = 1900-02-29 (a date that doesn't
+# exist in the proleptic Gregorian calendar). Standard workaround: anchor the
+# epoch at 1899-12-30 and add the serial as days. For serials >= 61 this is
+# exact; for serials 1..59 there's a 1-day offset, but all the dates we care
+# about (First Pymt Date, Fund Date, Closed Date) are post-2020 so the
+# correction is irrelevant.
+_EXCEL_EPOCH = dt.date(1899, 12, 30)
+
+
 def _iso_date(v: Any) -> Optional[str]:
+    """Coerce a cell value into an ISO `YYYY-MM-DD` date string.
+
+    Accepts ``datetime``/``date`` objects (when openpyxl has already parsed
+    the formatted cell), Excel serial numbers (int/float — the common case
+    when the cell type is "general" or numeric formatting strips the date
+    style), and ISO-shaped strings. Returns ``None`` when the value can't
+    be coerced — callers must tolerate missing dates.
+    """
     if v is None:
         return None
     if isinstance(v, dt.datetime):
         return v.date().isoformat()
     if isinstance(v, dt.date):
         return v.isoformat()
+    # Excel serial: numeric or numeric-string. Reject obviously-bogus values
+    # (negative; pre-1990; far future) so we never produce a date the rest of
+    # the pipeline will then have to ignore.
+    if isinstance(v, (int, float)):
+        try:
+            serial = float(v)
+            if 32874 <= serial <= 109573:  # 1990-01-01 .. 2199-12-31
+                return (_EXCEL_EPOCH + dt.timedelta(days=int(serial))).isoformat()
+        except (ValueError, OverflowError):
+            pass
+        return None
     s = str(v).strip()
-    return s or None
+    if not s:
+        return None
+    # Numeric-string serial (some Excel exports come through as text)
+    try:
+        serial = float(s)
+        if 32874 <= serial <= 109573:
+            return (_EXCEL_EPOCH + dt.timedelta(days=int(serial))).isoformat()
+    except ValueError:
+        pass
+    # Already-ISO string — keep the first 10 chars when shaped like a date.
+    if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+        return s[:10]
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -53,6 +53,14 @@ export interface ParsedLoan extends LoanRecord {
   isBoost: boolean;
   /** Would this loan have been filtered out by Enhanced Guidelines? */
   failsEnhancedGuidelines: boolean;
+  /**
+   * ISO `YYYY-MM-DD` First Payment Date from Encompass Data Tab column BB.
+   * `null` when missing or unparseable. Drives the Proposed Drop-Off (Next
+   * 3 Mo) column on the Term + Credit Watch tables: loans whose first
+   * payment is older than the rolled-forward HUD 24-month window are
+   * projected to drop off the office's underwriting denominator.
+   */
+  firstPaymentDate: string | null;
 }
 
 export interface OfficeSummary {
@@ -93,6 +101,28 @@ export interface OfficeSummary {
   dqRate: number;
   totalDPAConc: number;
   isImproved: boolean;
+  /**
+   * Projected compare ratio for this office after the HUD 24-month
+   * "beginning amortization date" window rolls forward 3 months.
+   *
+   * Math: count loans whose First Payment Date predates
+   * (current period end - 21 months + 1 day) — those are the loans that
+   * will fall out of HUD's window in 3 months. Remove them from BOTH the
+   * numerator (if delinquent) and the denominator, then re-derive the
+   * office's compare ratio using the same formula as `totalCR` (loans-vs-
+   * benchmark scaling).
+   *
+   * `null` when the snapshot lacks First Payment Date data on enough loans
+   * for the office to produce a meaningful projection.
+   */
+  proposedDropOffCR: number | null;
+  /** Number of loans projected to drop off the office's denominator. */
+  proposedDropOffCount: number;
+  /**
+   * The cutoff date used when computing `proposedDropOffCR`, exposed for the
+   * tooltip copy. ISO `YYYY-MM-DD`. `null` mirrors `proposedDropOffCR`.
+   */
+  proposedDropOffWindowStart: string | null;
 }
 
 /**
@@ -173,6 +203,10 @@ export interface DashboardData {
   totalLoans: number;
   overallDQRate: number;
   terminationRiskCount: number;
+  /** Number of offices on Credit Watch — the canonical Stefanie
+   *  methodology bucket (150% < CR <= 200% AND loans_count >= 100). Surfaced
+   *  on the top-row KPI tile beside Termination Risk. */
+  creditWatchCount: number;
   dpaPortfolioConc: number;
   /** Portfolio-level HUD Compare Ratio — Total scope (sourced from
    *  snapshot.compare_ratios_total[scope=='total']). */

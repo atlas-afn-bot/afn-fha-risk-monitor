@@ -12,18 +12,27 @@
  *      the SWA-level rule were misconfigured we still 403 anyone outside
  *      the allowlist.
  *
- * What it returns:
- *   { uploadUrl, blobPath, expiresAt }
+ * Request body:
+ *   {
+ *     filename: string,         // sanitized [A-Za-z0-9._-]+ (1..200)
+ *     category: string,         // one of the 6 slugs in CATEGORY_SLUGS
+ *     month?:   "YYYY-MM"       // optional; defaults to current UTC month
+ *   }
  *
- * The SAS is scoped to a *single* blob at /uploads/{yyyy-MM}/{filename}
+ * What it returns:
+ *   { uploadUrl, blobPath, expiresAt, category, month }
+ *
+ * The SAS is scoped to a *single* blob at
+ *   /uploads/{yyyy-MM}/{category-slug}/{filename}
  * with create+write permissions only and a 10-minute window.
  *
- * Server-controlled month folder: the caller cannot pick the folder; we
- * stamp it from `DateTime.UtcNow` at SAS issuance time. The caller only
- * supplies a filename, which we sanitize.
+ * Category model (added 2026-06-17, see PR for "6-slot uploader"):
+ *   The committee's six monthly inputs each get their own subfolder under
+ *   the month root. The Python snapshot pipeline reads from those slot
+ *   folders directly, which lets it identify each input by its slot rather
+ *   than parsing the filename (filenames stay free-form for audit trail).
  */
 const {
-  BlobServiceClient,
   StorageSharedKeyCredential,
   generateBlobSASQueryParameters,
   BlobSASPermissions,
@@ -35,12 +44,28 @@ const ALLOWED_EMAILS = new Set([
   'jdewindt@afncorp.com',
   'juliandomingo@afncorp.com',
   'mkunisaki@afncorp.com',
+  'sbarkey@afncorp.com',
   'stallman@afncorp.com',
+]);
+
+// The six canonical slot slugs. These map 1:1 to the inputs the Python
+// snapshot pipeline (`scripts/build-snapshot.py`) consumes. Frontend and
+// backend share the list via duplication — there's no shared TS+JS package
+// in this repo, so we keep the truth in *two* places and bake a unit-style
+// invariant into the smoke tests (see api/tests/upload-sas.smoke.js).
+const CATEGORY_SLUGS = new Set([
+  'hud-branches',
+  'hoc-compare-ratios',
+  'nw-data',
+  'hud-total-compare-ratios',
+  'hud-national-totals',
+  'hud-field-office',
 ]);
 
 const MAX_FILENAME_LEN = 200;
 const SAS_TTL_MINUTES = 10;
 const FILENAME_RE = /^[A-Za-z0-9._-]+$/;
+const MONTH_RE = /^(\d{4})-(\d{2})$/;
 
 function jsonResponse(context, status, body) {
   context.res = {
@@ -99,6 +124,23 @@ function sanitizeFilename(raw) {
   return base;
 }
 
+function validateCategory(raw) {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim().toLowerCase();
+  return CATEGORY_SLUGS.has(s) ? s : null;
+}
+
+function validateMonth(raw) {
+  // Optional. If supplied, must match YYYY-MM with a sane month part.
+  if (raw == null || raw === '') return null;
+  if (typeof raw !== 'string') return undefined; // sentinel for "bad input"
+  const m = MONTH_RE.exec(raw.trim());
+  if (!m) return undefined;
+  const month = parseInt(m[2], 10);
+  if (month < 1 || month > 12) return undefined;
+  return `${m[1]}-${m[2]}`;
+}
+
 function currentMonthFolder() {
   const now = new Date();
   const yyyy = now.getUTCFullYear();
@@ -151,7 +193,27 @@ module.exports = async function (context, req) {
     });
   }
 
-  // 3) Storage config
+  // 3) Validate the slot category
+  const category = validateCategory(req.body && req.body.category);
+  if (!category) {
+    return jsonResponse(context, 400, {
+      error: 'invalid_category',
+      message: `category must be one of: ${Array.from(CATEGORY_SLUGS).sort().join(', ')}`,
+    });
+  }
+
+  // 4) Validate optional month override
+  const monthInput = req.body && req.body.month;
+  const monthParsed = validateMonth(monthInput);
+  if (monthParsed === undefined) {
+    return jsonResponse(context, 400, {
+      error: 'invalid_month',
+      message: 'month must be a "YYYY-MM" string with a 01..12 month part.',
+    });
+  }
+  const folder = monthParsed || currentMonthFolder();
+
+  // 5) Storage config
   const connStr = process.env.UPLOADS_STORAGE_CONNECTION;
   const containerName = process.env.UPLOADS_CONTAINER || 'uploads';
   if (!connStr) {
@@ -166,11 +228,10 @@ module.exports = async function (context, req) {
     return jsonResponse(context, 500, { error: 'server_misconfigured' });
   }
 
-  // 4) Build the blob path: server-stamped month folder
-  const folder = currentMonthFolder();
-  const blobName = `${folder}/${filename}`;
+  // 6) Build the blob path: {folder}/{slug}/{filename}
+  const blobName = `${folder}/${category}/${filename}`;
 
-  // 5) Issue a narrowly-scoped SAS (single blob, create+write, 10 min)
+  // 7) Issue a narrowly-scoped SAS (single blob, create+write, 10 min)
   const credential = new StorageSharedKeyCredential(accountName, accountKey);
   const startsOn = new Date(Date.now() - 2 * 60 * 1000); // 2-min skew tolerance
   const expiresOn = new Date(Date.now() + SAS_TTL_MINUTES * 60 * 1000);
@@ -188,7 +249,7 @@ module.exports = async function (context, req) {
     credential,
   ).toString();
 
-  const uploadUrl = `https://${accountName}.blob.core.windows.net/${containerName}/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}?${sas}`;
+  const uploadUrl = `https://${accountName}.blob.core.windows.net/${containerName}/${encodeURIComponent(folder)}/${encodeURIComponent(category)}/${encodeURIComponent(filename)}?${sas}`;
 
   context.log.info(
     `upload-sas: issued SAS for ${email} → ${containerName}/${blobName} (expires ${expiresOn.toISOString()})`,
@@ -198,6 +259,11 @@ module.exports = async function (context, req) {
     uploadUrl,
     blobPath: blobName,
     container: containerName,
+    category,
+    month: folder,
     expiresAt: expiresOn.toISOString(),
   });
 };
+
+// Exported for smoke tests.
+module.exports.CATEGORY_SLUGS = CATEGORY_SLUGS;

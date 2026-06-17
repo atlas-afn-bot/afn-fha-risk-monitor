@@ -1,6 +1,13 @@
 /**
- * FileUploads tab — drag-and-drop upload of monthly committee files to
- * Azure Blob Storage, scoped to an allowlisted set of AFN users.
+ * FileUploads tab — six-slot upload of monthly committee files to Azure
+ * Blob Storage, scoped to an allowlisted set of AFN users.
+ *
+ * Previous design (PR #20, June 2026): single drop zone, files landed in a
+ * flat `/uploads/{yyyy-MM}/` layout. The committee asked us to carve those
+ * into six explicit, labelled slot cards — one card per Excel input the
+ * Python snapshot pipeline consumes — so the slot folder identifies each
+ * input by its role rather than by filename parsing. Filenames stay
+ * preserved for audit.
  *
  * Auth model:
  *   - The SWA (staticwebapp.config.json) gates the entire site behind
@@ -11,14 +18,18 @@
  *     and skip the upload affordances entirely.
  *
  * Upload model:
- *   - User drops files → component asks `/api/upload-sas { filename }`
- *     for a narrowly-scoped SAS URL.
- *   - Component PUTs the file body straight to blob storage with the
- *     `x-ms-blob-type: BlockBlob` header.
- *   - The month folder is server-stamped (UTC) at SAS-issuance time, so
- *     the UI displays it for informational purposes only.
+ *   - User picks a month (default = current UTC month) at the top of the
+ *     page. That month applies to every slot they touch on the page.
+ *   - User drops or picks one file per slot. The slot ↔ category slug
+ *     mapping is locked in `SLOT_DEFS` and matches the backend's
+ *     `CATEGORY_SLUGS` exactly.
+ *   - Component asks `/api/upload-sas { filename, category, month }` for a
+ *     narrowly-scoped SAS URL, then PUTs the file body straight to blob
+ *     storage with `x-ms-blob-type: BlockBlob`.
+ *   - Replacing a slot's file uploads the new one (Azure overwrites the
+ *     existing blob path since SAS has `create+write`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Upload as UploadIcon,
   CheckCircle2,
@@ -28,30 +39,77 @@ import {
   RefreshCw,
   LogIn,
   ShieldAlert,
+  X,
 } from 'lucide-react';
 
 const ALLOWED_EMAILS = new Set<string>([
   'jdewindt@afncorp.com',
   'juliandomingo@afncorp.com',
   'mkunisaki@afncorp.com',
+  'sbarkey@afncorp.com',
   'stallman@afncorp.com',
 ]);
 
 const FILENAME_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_FILENAME_LEN = 200;
 
-type UploadStatus =
-  | { kind: 'pending' }
-  | { kind: 'uploading'; progress: number }
-  | { kind: 'done'; blobPath: string }
-  | { kind: 'error'; message: string };
-
-interface QueuedUpload {
-  id: string;
-  file: File;
-  displayName: string;
-  status: UploadStatus;
+/**
+ * The six canonical slot definitions. `slug` MUST match the backend's
+ * `CATEGORY_SLUGS` set in `api/upload-sas/index.js` — the upload-sas smoke
+ * test asserts the slug list there is exactly these six values.
+ *
+ * Ordering reflects the committee's mental model:
+ *   1. HUD Branches            (per-branch NMLS performance)
+ *   2. HOC Compare Ratios      (4-row regional roll-up)
+ *   3. NW Data                 (HUD's seriously-delinquent list)
+ *   4. HUD Total Compare Ratios (1-row nationwide)
+ *   5. HUD National Totals     (totals reconcile)
+ *   6. HUD Field Office        (~77-92 office-level rows)
+ */
+interface SlotDef {
+  slug: string;
+  title: string;
+  description: string;
 }
+
+const SLOT_DEFS: ReadonlyArray<SlotDef> = [
+  {
+    slug: 'hud-branches',
+    title: 'HUD Branches',
+    description: 'Per-branch NMLS performance file (~85-99 rows).',
+  },
+  {
+    slug: 'hoc-compare-ratios',
+    title: 'HOC Compare Ratios',
+    description: '4 regional Homeownership Centers (Atlanta, Denver, Philadelphia, Santa Ana).',
+  },
+  {
+    slug: 'nw-data',
+    title: 'NW Data',
+    description: 'HUD seriously-delinquent loan list (~620 rows). Joined to Encompass by Case #.',
+  },
+  {
+    slug: 'hud-total-compare-ratios',
+    title: 'HUD Total Compare Ratios',
+    description: 'Single nationwide row: Total / Retail / Sponsor ratios + Mix-Adj SDQ.',
+  },
+  {
+    slug: 'hud-national-totals',
+    title: 'HUD National Totals',
+    description: 'Reconciliation totals across all HOCs and field offices.',
+  },
+  {
+    slug: 'hud-field-office',
+    title: 'HUD Field Office',
+    description: 'Office-level compare ratios (~77-92 offices).',
+  },
+];
+
+type UploadStatus =
+  | { kind: 'idle' }
+  | { kind: 'uploading'; progress: number; file: File; displayName: string }
+  | { kind: 'done'; blobPath: string; displayName: string; size: number }
+  | { kind: 'error'; message: string; displayName?: string };
 
 interface RecentItem {
   name: string;
@@ -71,6 +129,20 @@ function currentMonthFolderUtc(): string {
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   return `${yyyy}-${mm}`;
+}
+
+/** Generate the last N months (including current) as YYYY-MM strings, newest first. */
+function recentMonths(count: number): string[] {
+  const out: string[] = [];
+  const d = new Date();
+  d.setUTCDate(1);
+  for (let i = 0; i < count; i++) {
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    out.push(`${yyyy}-${mm}`);
+    d.setUTCMonth(d.getUTCMonth() - 1);
+  }
+  return out;
 }
 
 function sanitizeForDisplay(name: string): string {
@@ -117,17 +189,193 @@ function extractEmail(principal: any): string | null {
   return null;
 }
 
+// ─── Slot card ──────────────────────────────────────────────────────────────
+
+interface SlotCardProps {
+  def: SlotDef;
+  status: UploadStatus;
+  monthFolder: string;
+  onFile: (file: File) => void;
+  onClear: () => void;
+}
+
+function SlotCard({ def, status, monthFolder, onFile, onClear }: SlotCardProps) {
+  const [dragActive, setDragActive] = useState(false);
+  const inputId = `slot-input-${def.slug}`;
+
+  const busy = status.kind === 'uploading';
+  const filled = status.kind === 'done';
+  const errored = status.kind === 'error';
+
+  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!busy) setDragActive(true);
+  };
+  const onDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  };
+  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (busy) return;
+    const f = e.dataTransfer.files?.[0];
+    if (f) onFile(f);
+  };
+
+  const borderColor = errored
+    ? 'border-risk-red/40'
+    : filled
+      ? 'border-risk-green/40'
+      : dragActive
+        ? 'border-primary'
+        : 'border-border';
+
+  const bgColor = errored
+    ? 'bg-risk-red-bg/40'
+    : filled
+      ? 'bg-risk-green-bg/40'
+      : dragActive
+        ? 'bg-primary/5'
+        : 'bg-muted/30';
+
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={`relative rounded-lg border-2 border-dashed ${borderColor} ${bgColor} p-4 transition-colors min-h-[200px] flex flex-col`}
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <h4 className="text-sm font-semibold leading-tight">{def.title}</h4>
+          <p className="text-[10px] text-muted-foreground mt-0.5">{def.description}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">
+            <span className="font-mono">{monthFolder}/{def.slug}/</span>
+          </p>
+        </div>
+        {(filled || errored) && !busy && (
+          <button
+            onClick={onClear}
+            className="text-muted-foreground hover:text-foreground transition-colors p-1 -m-1"
+            aria-label={`Clear ${def.title}`}
+            title="Clear slot"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 mt-3 flex flex-col items-center justify-center text-center">
+        {status.kind === 'idle' && (
+          <>
+            <label
+              htmlFor={inputId}
+              className="cursor-pointer flex flex-col items-center text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <UploadIcon className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-medium">Drop or click to choose</span>
+              <span className="text-[10px] text-muted-foreground mt-0.5">One file</span>
+            </label>
+          </>
+        )}
+
+        {status.kind === 'uploading' && (
+          <>
+            <FileText className="w-5 h-5 text-muted-foreground mb-1" />
+            <span className="text-[11px] font-mono truncate max-w-full" title={status.displayName}>
+              {status.displayName}
+            </span>
+            <span className="text-[10px] text-muted-foreground mt-0.5">
+              {humanSize(status.file.size)}
+            </span>
+            <div className="w-full mt-2 h-1.5 bg-muted rounded overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${status.progress}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Uploading… {status.progress}%
+            </div>
+          </>
+        )}
+
+        {status.kind === 'done' && (
+          <>
+            <CheckCircle2 className="w-5 h-5 text-risk-green mb-1" />
+            <span className="text-[11px] font-mono truncate max-w-full" title={status.displayName}>
+              {status.displayName}
+            </span>
+            <span className="text-[10px] text-muted-foreground mt-0.5">
+              {humanSize(status.size)} · Complete
+            </span>
+            <label
+              htmlFor={inputId}
+              className="cursor-pointer mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Drop a new file to replace
+            </label>
+          </>
+        )}
+
+        {status.kind === 'error' && (
+          <>
+            <AlertCircle className="w-5 h-5 text-risk-red mb-1" />
+            {status.displayName && (
+              <span className="text-[11px] font-mono truncate max-w-full" title={status.displayName}>
+                {status.displayName}
+              </span>
+            )}
+            <span className="text-[10px] text-risk-red mt-0.5 break-words">
+              {status.message}
+            </span>
+            <label
+              htmlFor={inputId}
+              className="cursor-pointer mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Try again
+            </label>
+          </>
+        )}
+      </div>
+
+      {/* Hidden input */}
+      <input
+        id={inputId}
+        type="file"
+        className="hidden"
+        disabled={busy}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = '';
+        }}
+      />
+    </div>
+  );
+}
+
+// ─── Main component ────────────────────────────────────────────────────────
+
 export default function FileUploads() {
   const [auth, setAuth] = useState<AuthState>({ kind: 'loading' });
-  const [queue, setQueue] = useState<QueuedUpload[]>([]);
+  const [slotStatus, setSlotStatus] = useState<Record<string, UploadStatus>>(() =>
+    Object.fromEntries(SLOT_DEFS.map((s) => [s.slug, { kind: 'idle' as const }])),
+  );
   const [recent, setRecent] = useState<RecentItem[] | null>(null);
   const [recentLoading, setRecentLoading] = useState(false);
   const [recentError, setRecentError] = useState<string | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const queueIdSeq = useRef(0);
 
-  const monthFolder = useMemo(() => currentMonthFolderUtc(), []);
+  // Month selector — default to current UTC month, allow user to pick last 12.
+  const months = useMemo(() => recentMonths(12), []);
+  const [monthFolder, setMonthFolder] = useState<string>(currentMonthFolderUtc());
 
   // ── Auth bootstrap ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -191,126 +439,120 @@ export default function FileUploads() {
     }
   }, [auth.kind, loadRecent]);
 
-  // ── Upload one file ───────────────────────────────────────────────────────
-  const uploadOne = useCallback(async (item: QueuedUpload) => {
-    const updateStatus = (status: UploadStatus) =>
-      setQueue(prev => prev.map(q => (q.id === item.id ? { ...q, status } : q)));
+  // ── Upload one file to one slot ──────────────────────────────────────────
+  const uploadToSlot = useCallback(
+    async (slug: string, file: File) => {
+      const displayName = sanitizeForDisplay(file.name);
 
-    // 1) Get the SAS
-    let sasBody: { uploadUrl: string; blobPath: string; expiresAt: string };
-    try {
-      const sasRes = await fetch('/api/upload-sas', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: item.displayName }),
-      });
-      if (!sasRes.ok) {
-        const text = await sasRes.text().catch(() => '');
-        throw new Error(`SAS request failed (HTTP ${sasRes.status})${text ? `: ${text}` : ''}`);
-      }
-      sasBody = await sasRes.json();
-    } catch (e) {
-      updateStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
-      return;
-    }
-
-    // 2) PUT the blob using XHR so we get progress events
-    updateStatus({ kind: 'uploading', progress: 0 });
-    await new Promise<void>((resolve) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('PUT', sasBody.uploadUrl, true);
-      xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob');
-      xhr.setRequestHeader(
-        'x-ms-blob-content-type',
-        item.file.type || 'application/octet-stream',
-      );
-      xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable) {
-          const pct = Math.round((evt.loaded / evt.total) * 100);
-          updateStatus({ kind: 'uploading', progress: pct });
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          updateStatus({ kind: 'done', blobPath: sasBody.blobPath });
-        } else {
-          updateStatus({
+      if (!isValidFilename(displayName)) {
+        setSlotStatus((prev) => ({
+          ...prev,
+          [slug]: {
             kind: 'error',
-            message: `Blob PUT failed (HTTP ${xhr.status}) ${xhr.responseText?.slice(0, 200) ?? ''}`,
-          });
-        }
-        resolve();
-      };
-      xhr.onerror = () => {
-        updateStatus({ kind: 'error', message: 'Network error during upload.' });
-        resolve();
-      };
-      xhr.send(item.file);
-    });
-  }, []);
-
-  // ── Enqueue files (from drop or picker) ───────────────────────────────────
-  const enqueueFiles = useCallback(
-    (files: FileList | File[]) => {
-      const arr = Array.from(files);
-      const next: QueuedUpload[] = arr.map((file) => {
-        const displayName = sanitizeForDisplay(file.name);
-        const id = `q${++queueIdSeq.current}`;
-        if (!isValidFilename(displayName)) {
-          return {
-            id,
-            file,
+            message:
+              'Filename could not be sanitized to safe characters. Rename and retry.',
             displayName: file.name,
-            status: {
-              kind: 'error',
-              message:
-                'Filename could not be sanitized to safe characters. Rename and retry.',
-            },
-          };
-        }
-        return { id, file, displayName, status: { kind: 'pending' } };
-      });
-      setQueue((prev) => [...next, ...prev]);
-
-      // Kick off uploads sequentially for the ones we accepted. Sequential
-      // keeps the UI cleaner; the API and blob endpoint both happily handle
-      // parallel, but sequential makes the progress story obvious.
-      (async () => {
-        for (const item of next) {
-          if (item.status.kind !== 'error') {
-            await uploadOne(item);
-          }
-        }
-        // Refresh recent list after the batch.
-        loadRecent();
-      })();
-    },
-    [uploadOne, loadRecent],
-  );
-
-  // ── Drag handlers ─────────────────────────────────────────────────────────
-  const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(true);
-  }, []);
-  const onDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-  }, []);
-  const onDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setDragActive(false);
-      if (e.dataTransfer.files?.length) {
-        enqueueFiles(e.dataTransfer.files);
+          },
+        }));
+        return;
       }
+
+      setSlotStatus((prev) => ({
+        ...prev,
+        [slug]: { kind: 'uploading', progress: 0, file, displayName },
+      }));
+
+      // 1) Get the SAS for {category=slug, month=monthFolder}
+      let sasBody: { uploadUrl: string; blobPath: string; expiresAt: string; category: string; month: string };
+      try {
+        const sasRes = await fetch('/api/upload-sas', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: displayName, category: slug, month: monthFolder }),
+        });
+        if (!sasRes.ok) {
+          const text = await sasRes.text().catch(() => '');
+          throw new Error(`SAS request failed (HTTP ${sasRes.status})${text ? `: ${text}` : ''}`);
+        }
+        sasBody = await sasRes.json();
+      } catch (e) {
+        setSlotStatus((prev) => ({
+          ...prev,
+          [slug]: {
+            kind: 'error',
+            message: e instanceof Error ? e.message : String(e),
+            displayName,
+          },
+        }));
+        return;
+      }
+
+      // 2) PUT the blob with progress
+      await new Promise<void>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', sasBody.uploadUrl, true);
+        xhr.setRequestHeader('x-ms-blob-type', 'BlockBlob');
+        xhr.setRequestHeader(
+          'x-ms-blob-content-type',
+          file.type || 'application/octet-stream',
+        );
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable) {
+            const pct = Math.round((evt.loaded / evt.total) * 100);
+            setSlotStatus((prev) => {
+              const cur = prev[slug];
+              if (cur.kind !== 'uploading') return prev;
+              return { ...prev, [slug]: { ...cur, progress: pct } };
+            });
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setSlotStatus((prev) => ({
+              ...prev,
+              [slug]: {
+                kind: 'done',
+                blobPath: sasBody.blobPath,
+                displayName,
+                size: file.size,
+              },
+            }));
+          } else {
+            setSlotStatus((prev) => ({
+              ...prev,
+              [slug]: {
+                kind: 'error',
+                message: `Blob PUT failed (HTTP ${xhr.status}) ${xhr.responseText?.slice(0, 200) ?? ''}`,
+                displayName,
+              },
+            }));
+          }
+          resolve();
+        };
+        xhr.onerror = () => {
+          setSlotStatus((prev) => ({
+            ...prev,
+            [slug]: {
+              kind: 'error',
+              message: 'Network error during upload.',
+              displayName,
+            },
+          }));
+          resolve();
+        };
+        xhr.send(file);
+      });
+
+      // Refresh recent list after a successful PUT.
+      loadRecent();
     },
-    [enqueueFiles],
+    [loadRecent, monthFolder],
   );
+
+  const clearSlot = useCallback((slug: string) => {
+    setSlotStatus((prev) => ({ ...prev, [slug]: { kind: 'idle' } }));
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (auth.kind === 'loading') {
@@ -351,7 +593,7 @@ export default function FileUploads() {
           isn't on the upload allowlist for the FHA Risk Monitor.
         </p>
         <p className="text-xs text-muted-foreground">
-          Contact Jacob, Michael, or Stefanie if you believe you should have access.
+          Contact Jacob, Julian, Michael, or Stefanie if you believe you should have access.
         </p>
       </div>
     );
@@ -360,115 +602,54 @@ export default function FileUploads() {
   // Authorized path
   return (
     <div className="space-y-6">
-      <div className="bg-card rounded-lg border border-border p-5 space-y-1">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <UploadIcon className="w-4 h-4" />
-          File Uploads
-        </h3>
-        <p className="text-xs text-muted-foreground">
-          Drop committee files below. They land in Azure Blob Storage under a
-          month folder stamped server-side at upload time. No parsing happens
-          yet — this is a drop zone only.
-        </p>
-        <p className="text-[11px] text-muted-foreground">
-          Signed in as <span className="font-mono">{auth.email}</span>. Uploading to month
-          folder: <span className="font-mono font-semibold">{monthFolder}</span> (UTC).
-        </p>
-      </div>
-
-      {/* Drop zone */}
-      <div
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onDrop={onDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`cursor-pointer border-2 border-dashed rounded-lg p-10 text-center transition-colors ${
-          dragActive
-            ? 'border-primary bg-primary/5'
-            : 'border-border bg-muted/30 hover:bg-muted/50'
-        }`}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click();
-        }}
-      >
-        <UploadIcon className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
-        <p className="text-sm font-medium">Drop files here or click to choose</p>
-        <p className="text-xs text-muted-foreground mt-1">
-          Any file type accepted. Filename must use letters, digits, dot, dash, or
-          underscore — invalid characters will be auto-sanitized to underscores.
-        </p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files?.length) enqueueFiles(e.target.files);
-            // reset so picking the same file twice re-triggers
-            e.target.value = '';
-          }}
-        />
-      </div>
-
-      {/* Active queue */}
-      {queue.length > 0 && (
-        <div className="bg-card rounded-lg border border-border p-5 space-y-3">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            This session
-          </h4>
-          <ul className="space-y-2">
-            {queue.map((q) => (
-              <li
-                key={q.id}
-                className="flex items-center gap-3 text-xs border border-border rounded-md p-3 bg-background"
-              >
-                <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between gap-2">
-                    <span className="font-mono truncate">{q.displayName}</span>
-                    <span className="text-muted-foreground flex-shrink-0">
-                      {humanSize(q.file.size)}
-                    </span>
-                  </div>
-                  {q.status.kind === 'uploading' && (
-                    <div className="mt-2">
-                      <div className="h-1.5 bg-muted rounded overflow-hidden">
-                        <div
-                          className="h-full bg-primary transition-all"
-                          style={{ width: `${q.status.progress}%` }}
-                        />
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        Uploading… {q.status.progress}%
-                      </p>
-                    </div>
-                  )}
-                  {q.status.kind === 'pending' && (
-                    <p className="text-[10px] text-muted-foreground mt-1">Queued</p>
-                  )}
-                  {q.status.kind === 'done' && (
-                    <p className="text-[10px] text-risk-green mt-1 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Uploaded to <span className="font-mono">{q.status.blobPath}</span>
-                    </p>
-                  )}
-                  {q.status.kind === 'error' && (
-                    <p className="text-[10px] text-risk-red mt-1 flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" />
-                      {q.status.message}
-                    </p>
-                  )}
-                </div>
-                {q.status.kind === 'uploading' && (
-                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                )}
-              </li>
-            ))}
-          </ul>
+      {/* Header + month selector */}
+      <div className="bg-card rounded-lg border border-border p-5 space-y-3">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <UploadIcon className="w-4 h-4" />
+              File Uploads
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Drop committee files into the six labelled slots below. Each slot
+              accepts a single file and lands in its own folder under the
+              selected month: <span className="font-mono">uploads/{monthFolder}/{'{'}slug{'}'}/</span>.
+            </p>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Signed in as <span className="font-mono">{auth.email}</span>.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <label htmlFor="upload-month" className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+              Month
+            </label>
+            <select
+              id="upload-month"
+              value={monthFolder}
+              onChange={(e) => setMonthFolder(e.target.value)}
+              className="text-xs border border-border rounded-md bg-background px-2 py-1.5 font-mono"
+            >
+              {months.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
         </div>
-      )}
+      </div>
+
+      {/* 6 slot cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {SLOT_DEFS.map((def) => (
+          <SlotCard
+            key={def.slug}
+            def={def}
+            status={slotStatus[def.slug]}
+            monthFolder={monthFolder}
+            onFile={(file) => uploadToSlot(def.slug, file)}
+            onClear={() => clearSlot(def.slug)}
+          />
+        ))}
+      </div>
 
       {/* Recent uploads */}
       <div className="bg-card rounded-lg border border-border p-5 space-y-3">

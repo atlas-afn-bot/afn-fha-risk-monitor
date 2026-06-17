@@ -69,7 +69,12 @@ function isSubTab(v: string | null): v is DeepDiveSubTab {
  * snapshot. Previously this came from IndexedDB (populated by the old HUD
  * file upload flow); with JSON snapshots we overlay the active snapshot's
  * top-line compare ratios on top of the long-running hardcoded series.
+ *
+ * Window length: capped at the **most recent 24 months** so the trend chart
+ * and the PDF copy match HUD's rolling 24-month "beginning amortization
+ * date" window. Anything older falls off the chart entirely.
  */
+const TREND_WINDOW_MONTHS = 24;
 function buildTrendHistory(snapshot: Snapshot | null): HUDMonthlySnapshot[] {
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const seeded: HUDMonthlySnapshot[] = historicalTrend.map(h => {
@@ -90,12 +95,12 @@ function buildTrendHistory(snapshot: Snapshot | null): HUDMonthlySnapshot[] {
     };
   });
 
-  if (!snapshot) return seeded;
+  if (!snapshot) return seeded.slice(-TREND_WINDOW_MONTHS);
 
   const total = snapshot.compare_ratios_total.find(r => r.scope === 'total');
   const retail = snapshot.compare_ratios_total.find(r => r.scope === 'retail');
   const sponsor = snapshot.compare_ratios_total.find(r => r.scope === 'sponsor');
-  if (!total) return seeded;
+  if (!total) return seeded.slice(-TREND_WINDOW_MONTHS);
 
   const [y, m] = snapshot.snapshot_meta.period.split('-');
   const monthLabel = `${monthNames[parseInt(m, 10) - 1]} ${y}`;
@@ -118,7 +123,8 @@ function buildTrendHistory(snapshot: Snapshot | null): HUDMonthlySnapshot[] {
   const merged = seeded.filter(s => s.monthKey !== snapshotEntry.monthKey);
   merged.push(snapshotEntry);
   merged.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-  return merged;
+  // Cap to the most recent N months — see TREND_WINDOW_MONTHS above.
+  return merged.slice(-TREND_WINDOW_MONTHS);
 }
 
 export default function Index() {
@@ -390,7 +396,11 @@ export default function Index() {
                         <TerminationRiskCards offices={data.offices} />
                       </div>
                       <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} />
-                      <PerformanceMatrix offices={data.offices} title="Credit Watch — Top 5 Priority" emoji="⚠️" filterFn={o => o.totalCR >= 150 && o.totalCR <= 200 && o.totalLoans >= 100} maxRows={5} />
+                      {/* Credit Watch list was previously capped to top 5 via `maxRows={5}` (Apr 2026 vintage).
+                          That truncated the committee's own canonical list (PDF showed 9 for April), so the
+                          cap is gone — the Performance Matrix now renders every office in the (150, 200] CR
+                          band with >= 100 loans. */}
+                      <PerformanceMatrix offices={data.offices} title="Credit Watch — Performance Matrix" emoji="⚠️" filterFn={o => o.totalCR > 150 && o.totalCR <= 200 && o.totalLoans >= 100} />
                       <CreditWatchSimple offices={data.offices} />
                       <HUDConcentration data={data} />
                     </div>
