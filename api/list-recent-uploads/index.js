@@ -10,6 +10,7 @@ const ALLOWED_EMAILS = new Set([
   'jdewindt@afncorp.com',
   'juliandomingo@afncorp.com',
   'mkunisaki@afncorp.com',
+  'sbarkey@afncorp.com',
   'stallman@afncorp.com',
 ]);
 

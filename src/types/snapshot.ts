@@ -332,6 +332,15 @@ export interface Loan {
   funded_date?: string | null;
   /** Closed date from Encompass. */
   closed_date?: string | null;
+  /**
+   * First Payment Date from Encompass Data Tab column BB (also known as
+   * "First Pymt Date"). ISO `YYYY-MM-DD` when present.
+   *
+   * Drives the "Proposed Drop-Off (Next 3 Mo)" column on the Term and
+   * Credit Watch tables — used as a proxy for HUD's "beginning amortization
+   * date" rolling 24-month window.
+   */
+  first_payment_date?: string | null;
   /** Lien position from Encompass. */
   lien_position?: string | null;
   /** Borrower count from Encompass. */

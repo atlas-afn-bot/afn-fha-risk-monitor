@@ -17,6 +17,48 @@ function crBadge(val: number | null) {
 }
 
 /**
+ * Renders the "Proposed Drop-Off (Next 3 Mo)" cell.
+ *
+ * Display: projected compare ratio as a CR badge (colour-coded against the
+ * same 150 / 200 thresholds as Total CR). When projection is unavailable
+ * (legacy snapshot without First Payment Date, or zero loans), shows an
+ * unobtrusive em-dash.
+ *
+ * Tooltip: count of loans projected to roll off the office's denominator
+ * plus the new window-start date. Implemented via the native `title`
+ * attribute so it works in PDF print and inside the matrix's overflow-x.
+ */
+function DropOffCell({
+  proposedCR,
+  droppingCount,
+  windowStart,
+}: {
+  proposedCR: number | null;
+  droppingCount: number;
+  windowStart: string | null;
+}) {
+  if (proposedCR === null) {
+    return (
+      <td className="matrix-cell border-l border-border" title="First Payment Date not available on this snapshot.">
+        <span className="text-muted-foreground text-xs">—</span>
+      </td>
+    );
+  }
+  const loansWord = droppingCount === 1 ? 'loan' : 'loans';
+  const tooltip =
+    `${droppingCount} ${loansWord} rolling off in next 3 months` +
+    (windowStart ? ` (loans with First Payment Date before ${windowStart}).` : '.');
+  return (
+    <td className="matrix-cell border-l border-border" title={tooltip}>
+      {crBadge(proposedCR)}
+      <div className="text-[10px] text-muted-foreground mt-0.5">
+        {droppingCount} {loansWord}
+      </div>
+    </td>
+  );
+}
+
+/**
  * Stacked SDQ% cell: shows original (top, gray, small), revised (middle, bold,
  * color-coded by direction), and the absolute delta in percentage points
  * (bottom, italic). Provides the audit chain Stefanie asked for — reviewers
@@ -59,7 +101,7 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
   }, [offices, filterFn, maxRows]);
 
   const exportCSV = () => {
-    const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Total SDQ%','Retail SDQ%','WS SDQ%','Rev Total SDQ%','Rev Retail SDQ%','Rev WS SDQ%','Rev Total CR','Rev Retail CR','Rev WS CR'];
+    const headers = ['Office','Total CR','Retail CR','WS CR','Total Loans','Retail','WS','Total DLQ','Retail DLQ','WS DLQ','R Non-DPA','R Boost','R Other DPA','WS Non-DPA','WS Boost','WS Other DPA','R Removed','WS Removed','Total SDQ%','Retail SDQ%','WS SDQ%','Rev Total SDQ%','Rev Retail SDQ%','Rev WS SDQ%','Rev Total CR','Rev Retail CR','Rev WS CR','Proposed Drop-Off CR','Loans Rolling Off (3 Mo)'];
     const rows = filtered.map(o => [
       o.name,o.totalCR,o.retailCR??'',o.wsCR??'',
       o.totalLoans,o.retailLoans,o.wsLoans,
@@ -74,6 +116,8 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
       o.revisedRetailDQPct !== null ? o.revisedRetailDQPct.toFixed(2) : '',
       o.revisedWSDQPct !== null ? o.revisedWSDQPct.toFixed(2) : '',
       o.revisedTotalCR,o.revisedRetailCR??'',o.revisedWSCR??'',
+      o.proposedDropOffCR ?? '',
+      o.proposedDropOffCount,
     ].join(','));
     const csv = [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -105,6 +149,7 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header text-center border-l border-border" colSpan={3}>WS DLQ Breakdown</th>
               <th className="matrix-header text-center border-l border-border" colSpan={2}>Enhanced Guidelines</th>
               <th className="matrix-header text-center border-l border-border" colSpan={6}>Revised Ratios</th>
+              <th className="matrix-header text-center border-l border-border" colSpan={1}>3-Mo Projection</th>
             </tr>
             <tr className="border-b border-border">
               <th className="matrix-header whitespace-nowrap text-left">Office</th>
@@ -131,6 +176,7 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
               <th className="matrix-header whitespace-nowrap border-l border-border">Total CR</th>
               <th className="matrix-header">Retail CR</th>
               <th className="matrix-header">WS CR</th>
+              <th className="matrix-header whitespace-nowrap border-l border-border" title="Projected total compare ratio after HUD's 24-month beginning-amortization-date window rolls forward 3 months. Hover a cell for the loans-rolling-off count.">Proposed Drop-Off</th>
             </tr>
           </thead>
           <tbody>
@@ -160,6 +206,11 @@ export default function PerformanceMatrix({ offices, title, emoji, filterFn, max
                 <td className="matrix-cell border-l border-border">{crBadge(o.revisedTotalCR)}</td>
                 <td className="matrix-cell">{crBadge(o.revisedRetailCR)}</td>
                 <td className="matrix-cell">{crBadge(o.revisedWSCR)}</td>
+                <DropOffCell
+                  proposedCR={o.proposedDropOffCR}
+                  droppingCount={o.proposedDropOffCount}
+                  windowStart={o.proposedDropOffWindowStart}
+                />
               </tr>
             ))}
           </tbody>

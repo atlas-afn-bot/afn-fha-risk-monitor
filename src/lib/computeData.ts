@@ -53,7 +53,10 @@ export function isCreditWatchOffice(o: OfficeSummary): boolean {
 export function buildDashboardFromSnapshot(snapshot: Snapshot): DashboardData {
   const loans = snapshot.loans.map(snapshotLoanToParsed);
   const hudData = snapshot.compare_ratios_hud_office.map(hudOfficeToCR);
-  const dashboard = computeDashboard(loans, hudData);
+  // performance_period drives the HUD 24-month window cutoff for the
+  // Proposed Drop-Off projection. ISO `YYYY-MM-DD`; safe to pass straight
+  // through — Date.parse handles it on every browser.
+  const dashboard = computeDashboard(loans, hudData, snapshot.snapshot_meta.performance_period);
   // Forward NW Data extension rollups straight through. They're optional
   // so older snapshots without these arrays still produce a valid
   // DashboardData (the new tabs just render an empty state).
@@ -122,6 +125,7 @@ function snapshotLoanToParsed(l: SnapshotLoan): ParsedLoan {
     isDPA: l.has_dpa,
     isBoost: l.is_boost,
     failsEnhancedGuidelines: l.fails_enhanced_guidelines,
+    firstPaymentDate: l.first_payment_date ?? null,
   };
 }
 
@@ -144,21 +148,33 @@ function hudOfficeToCR(h: CompareRatioHudOffice): HUDOfficeCR {
   };
 }
 
-export function computeDashboard(loans: ParsedLoan[], hudData?: HUDOfficeCR[]): DashboardData {
+export function computeDashboard(
+  loans: ParsedLoan[],
+  hudData?: HUDOfficeCR[],
+  performancePeriodEnd?: string,
+): DashboardData {
   const totalLoans = loans.length;
   const totalDLQ = loans.filter(l => l.isDelinquent).length;
   const overallDQRate = totalLoans > 0 ? (totalDLQ / totalLoans) * 100 : 0;
   const totalDPA = loans.filter(l => l.isDPA).length;
   const dpaPortfolioConc = totalLoans > 0 ? (totalDPA / totalLoans) * 100 : 0;
 
-  const offices = computeOffices(loans, overallDQRate, hudData);
+  const offices = computeOffices(loans, overallDQRate, hudData, performancePeriodEnd);
   const terminationRiskCount = offices.filter(o => o.totalCR > 200 && o.totalLoans > 100).length;
+  // Credit Watch tile: same loan-size guard as Term Watch (>= 100 loans),
+  // CR in (150, 200]. Matches the committee's "sized credit watch" bucket
+  // (Stefanie's methodology) so the dashboard number agrees with the
+  // Performance Matrix below it.
+  const creditWatchCount = offices.filter(
+    o => o.totalCR > 150 && o.totalCR <= 200 && o.totalLoans >= 100,
+  ).length;
 
   return {
     loans,
     totalLoans,
     overallDQRate,
     terminationRiskCount,
+    creditWatchCount,
     dpaPortfolioConc,
     overallCR: null,
     retailCR: null,
@@ -175,7 +191,46 @@ export function computeDashboard(loans: ParsedLoan[], hudData?: HUDOfficeCR[]): 
   };
 }
 
-function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HUDOfficeCR[]): OfficeSummary[] {
+/**
+ * Compute the rolled-forward HUD window's "start cutoff" date.
+ *
+ * HUD reports each month with a 24-month rolling window of beginning
+ * amortization dates ending at `performancePeriodEnd`. For our 3-month
+ * projection we ask: "what's the new window-start three months from now?"
+ *
+ * Algorithm: rollforwardStart = (periodEnd + 1 day) - 21 months
+ * Equivalent: keep loans whose first_payment_date >= rollforwardStart.
+ * Loans older than that drop off the office's denominator.
+ *
+ * Returns `null` if the input can't be parsed — callers should fall back
+ * to skipping the projection (proposedDropOffCR=null).
+ */
+export function rollforwardWindowStart(performancePeriodEnd: string | undefined): Date | null {
+  if (!performancePeriodEnd) return null;
+  // Parse ISO date in UTC so day-roll math stays stable across timezones.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(performancePeriodEnd.slice(0, 10));
+  if (!m) return null;
+  const y = parseInt(m[1], 10);
+  const mo = parseInt(m[2], 10);
+  const d = parseInt(m[3], 10);
+  // periodEnd as UTC, then +1 day, then -21 months. The clamp to month-end
+  // is fine — Date in JS auto-rolls e.g. "Feb 31" → "Mar 3".
+  const after = new Date(Date.UTC(y, mo - 1, d + 1));
+  after.setUTCMonth(after.getUTCMonth() - 21);
+  return after;
+}
+
+/** Format a Date as `YYYY-MM-DD` (UTC) for tooltips / labels. */
+function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function computeOffices(
+  loans: ParsedLoan[],
+  overallDQRate: number,
+  hudData?: HUDOfficeCR[],
+  performancePeriodEnd?: string,
+): OfficeSummary[] {
   // Build lookup map for HUD compare ratio data
   const hudMap = new Map<string, HUDOfficeCR>();
   if (hudData) {
@@ -322,6 +377,64 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
 
     const isImproved = totalCR > 200 && revisedTotalCR < 150;
 
+    // ── Proposed Drop-Off projection (Next 3 Mo) ─────────────────────────
+    //
+    // Source: ParsedLoan.firstPaymentDate (Encompass Data Tab col BB).
+    // Window: HUD's rolling 24-month "beginning amortization date" window.
+    // For a 3-month roll-forward, any loan whose First Payment Date predates
+    // (current period end + 1 day - 21 months) will be outside the new window.
+    //
+    // We use the office's CURRENT compare ratio (totalCR — the value rendered
+    // in the Term/Credit Watch tables today) as the baseline, then scale it
+    // by the ratio of (loans remaining in-window) / (total loans). This
+    // matches HUD's mechanical approach of recomputing the lender DQ% over
+    // the reduced loan set; the area-DQ% denominator stays fixed because the
+    // benchmark window rolls forward in lockstep.
+    let proposedDropOffCR: number | null = null;
+    let proposedDropOffCount = 0;
+    let proposedDropOffWindowStart: string | null = null;
+    const cutoff = rollforwardWindowStart(performancePeriodEnd);
+    if (cutoff) {
+      proposedDropOffWindowStart = isoDay(cutoff);
+      // Drops off = first_payment_date < cutoff. Loans without a date are
+      // assumed to stay in-window (conservative — don't artificially shrink
+      // the denominator on missing data).
+      const droppingLoans = officeLoans.filter(l => {
+        const fpd = l.firstPaymentDate;
+        if (!fpd) return false;
+        return fpd < proposedDropOffWindowStart!;
+      });
+      proposedDropOffCount = droppingLoans.length;
+
+      // Only project when:
+      //   1) we have a baseline CR > 0
+      //   2) at least *one* loan in the office has a parseable FPD (otherwise
+      //      we'd be claiming "0 drops, no change" purely because the field
+      //      is missing, which is misleading on legacy snapshots).
+      const hasAnyFPD = officeLoans.some(l => l.firstPaymentDate);
+      if (totalCR > 0 && hasAnyFPD && total > 0) {
+        const droppingDLQ = droppingLoans.filter(l => l.isDelinquent).length;
+        const remainingLoans = total - proposedDropOffCount;
+        const remainingDLQ = totalDLQ - droppingDLQ;
+        if (remainingLoans > 0) {
+          // Scale: newCR / oldCR = newLenderDQ% / oldLenderDQ%
+          //        = (remainingDLQ/remainingLoans) / (totalDLQ/total)
+          // Edge case: oldLenderDQ%==0 → keep the CR flat (no signal to scale).
+          if (totalDLQ > 0) {
+            const oldDqRate = totalDLQ / total;
+            const newDqRate = remainingDLQ / remainingLoans;
+            proposedDropOffCR = Math.round(totalCR * (newDqRate / oldDqRate));
+          } else {
+            proposedDropOffCR = totalCR;
+          }
+        } else {
+          // All loans projected to drop off — office effectively wound down
+          // in the projection window. Surface 0 to make that visible.
+          proposedDropOffCR = 0;
+        }
+      }
+    }
+
     results.push({
       name, totalCR, retailCR, wsCR,
       totalLoans: total, retailLoans: retail.length, wsLoans: ws.length,
@@ -336,6 +449,9 @@ function computeOffices(loans: ParsedLoan[], overallDQRate: number, hudData?: HU
       dqRate: total > 0 ? (totalDLQ / total) * 100 : 0,
       totalDPAConc,
       isImproved,
+      proposedDropOffCR,
+      proposedDropOffCount,
+      proposedDropOffWindowStart,
     });
   }
 

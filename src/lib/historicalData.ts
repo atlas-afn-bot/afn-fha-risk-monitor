@@ -1,3 +1,20 @@
+/**
+ * Long-running hardcoded HUD Compare Ratio history seed.
+ *
+ * Kept long for archival reasons (Excel-upload era data we don't want to
+ * lose), but the dashboard + PDF only render the most recent
+ * {@link TREND_WINDOW_MONTHS} entries via {@link trimToTrendWindow}. The
+ * window matches HUD's "rolling 24-month beginning amortization date"
+ * methodology so committee viewers see a chart that lines up with the
+ * report HUD itself publishes.
+ */
+export const TREND_WINDOW_MONTHS = 24;
+
+export function trimToTrendWindow<T>(series: T[]): T[] {
+  if (series.length <= TREND_WINDOW_MONTHS) return series;
+  return series.slice(series.length - TREND_WINDOW_MONTHS);
+}
+
 export const historicalTrend = [
   { month: 'Jan 2024', overall: 172, retail: 157, wholesale: 197 },
   { month: 'Feb 2024', overall: 155, retail: 149, wholesale: 170 },
