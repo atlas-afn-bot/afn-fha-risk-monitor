@@ -63,14 +63,32 @@ const MAX_FILENAME_LEN = 200;
  *   2. HOC Compare Ratios      (4-row regional roll-up)
  *   3. NW Data                 (HUD's seriously-delinquent list)
  *   4. HUD Total Compare Ratios (1-row nationwide)
- *   5. HUD National Totals     (totals reconcile)
+ *   5. HUD National Totals     (totals reconcile)        ← hidden from UI (2026-06-22)
  *   6. HUD Field Office        (~77-92 office-level rows)
+ *
+ * Visibility (2026-06-22): `hud-national-totals` is hidden from the
+ * uploader UI per Jacob Gruber's request — the National Totals input is
+ * consumed by Michael Kunisaki's RPA pipeline directly (via the read-only
+ * `/api/files` endpoint) rather than uploaded through this form. The slot
+ * remains a valid backend category so any system writing to
+ * `/uploads/<YYYY-MM>/hud-national-totals/` (RPA, historical April/May
+ * data, future re-enablement) keeps working unchanged. To re-expose it in
+ * the UI, just drop the `HIDDEN_SLOT_SLUGS` filter below.
  */
 interface SlotDef {
   slug: string;
   title: string;
   description: string;
 }
+
+/**
+ * Slugs that exist in the backend `CATEGORY_SLUGS` set but should NOT
+ * render as tiles on the /uploads page. Keep this list narrow — the
+ * default should always be "show all backend slots".
+ */
+const HIDDEN_SLOT_SLUGS: ReadonlySet<string> = new Set<string>([
+  'hud-national-totals',
+]);
 
 const SLOT_DEFS: ReadonlyArray<SlotDef> = [
   {
@@ -104,6 +122,16 @@ const SLOT_DEFS: ReadonlyArray<SlotDef> = [
     description: 'Office-level compare ratios (~77-92 offices).',
   },
 ];
+
+/**
+ * Subset of `SLOT_DEFS` that actually renders as tiles in the uploader UI.
+ * `SLOT_DEFS` stays as the full backend-aligned 6-slot source of truth so
+ * state shape, type derivations, and any future per-slot lookups still
+ * cover every backend category.
+ */
+const VISIBLE_SLOT_DEFS: ReadonlyArray<SlotDef> = SLOT_DEFS.filter(
+  (s) => !HIDDEN_SLOT_SLUGS.has(s.slug),
+);
 
 type UploadStatus =
   | { kind: 'idle' }
@@ -611,7 +639,7 @@ export default function FileUploads() {
               File Uploads
             </h3>
             <p className="text-xs text-muted-foreground mt-1">
-              Drop committee files into the six labelled slots below. Each slot
+              Drop committee files into the labelled slots below. Each slot
               accepts a single file and lands in its own folder under the
               selected month: <span className="font-mono">uploads/{monthFolder}/{'{'}slug{'}'}/</span>.
             </p>
@@ -637,9 +665,9 @@ export default function FileUploads() {
         </div>
       </div>
 
-      {/* 6 slot cards */}
+      {/* 5 visible slot cards (hud-national-totals is hidden — see HIDDEN_SLOT_SLUGS) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {SLOT_DEFS.map((def) => (
+        {VISIBLE_SLOT_DEFS.map((def) => (
           <SlotCard
             key={def.slug}
             def={def}
