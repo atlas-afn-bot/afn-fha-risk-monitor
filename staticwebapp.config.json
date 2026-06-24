@@ -34,6 +34,17 @@
       "methods": ["GET"]
     },
     {
+      "_comment": "Read-only files API for RPA (Michael Kunisaki's team). Auth is API-key-only (X-API-Key header), enforced inside the Function. Must be anonymous at the SWA layer so RPA isn't redirected to Entra SSO.",
+      "route": "/api/files/*",
+      "allowedRoles": ["anonymous", "authenticated"],
+      "methods": ["GET"]
+    },
+    {
+      "route": "/api/files",
+      "allowedRoles": ["anonymous", "authenticated"],
+      "methods": ["GET"]
+    },
+    {
       "route": "/uploads",
       "allowedRoles": ["authenticated"]
     },
