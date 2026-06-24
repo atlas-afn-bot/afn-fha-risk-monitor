@@ -49,6 +49,7 @@ const VALID_SLOTS = new Set([
   'hud-total-compare-ratios',
   'hud-national-totals',
   'hud-field-office',
+  'enc-data',
 ]);
 
 const MONTH_RE = /^(\d{4})-(\d{2})$/;
