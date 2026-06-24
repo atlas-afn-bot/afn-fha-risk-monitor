@@ -49,7 +49,7 @@ const UPLOAD_SLOTS = new Set([
 ]);
 
 const MONTH_RE = /^(\d{4})-(\d{2})$/;
-const FILENAME_RE = /^[A-Za-z0-9._-]+$/;
+const FILENAME_RE = /^[A-Za-z0-9._\- ]+$/;
 const MAX_FILENAME_LEN = 200;
 const MAX_BODY_BYTES = 100 * 1024 * 1024; // 100 MB
 
@@ -153,7 +153,7 @@ module.exports = async function (context, req) {
     return jsonResponse(context, 400, {
       error: 'invalid_filename',
       message:
-        'X-Filename header is required and must match [A-Za-z0-9._-]+ (1-200 chars, no directory separators, no leading dot).',
+        'X-Filename header is required and must match [A-Za-z0-9._ -]+ (1-200 chars, no directory separators, no leading dot).',
     });
   }
 
