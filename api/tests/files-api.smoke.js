@@ -33,10 +33,7 @@ const FIXTURE_BLOBS = [
     name: '2026-05/hud-branches/HUD_Branches_5.31.26_v2.xlsx',
     properties: { contentLength: 24000, lastModified: new Date('2026-06-02T12:00:00Z'), contentType: 'application/vnd.openxmlformats' },
   },
-  {
-    name: '2026-05/hud-national-totals/National_Totals_5.26.xlsx',
-    properties: { contentLength: 34567, lastModified: new Date('2026-06-01T14:00:00Z'), contentType: 'application/vnd.openxmlformats' },
-  },
+
   {
     name: '2026-05/hud-field-office/Field_Office.xlsx',
     properties: { contentLength: 45678, lastModified: new Date('2026-06-01T15:00:00Z'), contentType: 'application/vnd.openxmlformats' },
@@ -150,13 +147,7 @@ const AUTH = { 'x-api-key': TEST_API_KEY };
       b.count === 2 &&
       b.files.every((f) => f.month === '2026-05' && f.slot === 'hud-branches'),
   });
-  cases.push({
-    name: 'list: national-totals slot IS exposed (the whole point)',
-    run: () => callList(AUTH, { slot: 'hud-national-totals' }),
-    expect: 200,
-    assertBody: (b) =>
-      b.count === 1 && b.files[0].slot === 'hud-national-totals',
-  });
+
   cases.push({
     name: 'list: invalid slot → 400',
     run: () => callList(AUTH, { slot: 'not-a-real-slot' }),
@@ -216,18 +207,7 @@ const AUTH = { 'x-api-key': TEST_API_KEY };
     assertHeaders: (h) =>
       h['X-Resolved-Filename'] === 'HUD_Branches_5.31.26_v2.xlsx',
   });
-  cases.push({
-    name: 'download: latest on national-totals works (API-only slot)',
-    run: () =>
-      callDownload(AUTH, {
-        month: '2026-05',
-        slot: 'hud-national-totals',
-        filename: 'latest',
-      }),
-    expect: 302,
-    assertHeaders: (h) =>
-      h['X-Resolved-Filename'] === 'National_Totals_5.26.xlsx',
-  });
+
   cases.push({
     name: 'download: latest on empty folder → 404',
     run: () =>

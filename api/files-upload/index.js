@@ -43,7 +43,6 @@ const UPLOAD_SLOTS = new Set([
   'hoc-compare-ratios',
   'nw-data',
   'hud-total-compare-ratios',
-  'hud-national-totals',
   'hud-field-office',
   'enc-data',
 ]);

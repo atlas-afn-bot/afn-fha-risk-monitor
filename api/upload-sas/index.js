@@ -58,7 +58,6 @@ const CATEGORY_SLUGS = new Set([
   'hoc-compare-ratios',
   'nw-data',
   'hud-total-compare-ratios',
-  'hud-national-totals',
   'hud-field-office',
 ]);
 

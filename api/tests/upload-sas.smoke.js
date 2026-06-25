@@ -129,7 +129,6 @@ async function callHandler(headers, body, method = 'POST') {
     'hoc-compare-ratios',
     'hud-branches',
     'hud-field-office',
-    'hud-national-totals',
     'hud-total-compare-ratios',
     'nw-data',
   ];

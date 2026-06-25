@@ -30,9 +30,8 @@
  *   }
  *
  * Notes:
- *   - `hud-national-totals` is hidden from the uploader UI but IS exposed
- *     here. The whole reason this API exists is to let RPA pull every slot,
- *     including National Totals.
+ *   - `hud-national-totals` has been removed — use `hud-total-compare-ratios`
+ *     instead (same file).
  *   - Blobs that don't match the expected `{month}/{slot}/{filename}` path
  *     are silently skipped (defensive against any stray blobs).
  *   - File names returned in `filename` and `downloadUrl` are the original
@@ -47,7 +46,6 @@ const VALID_SLOTS = new Set([
   'hoc-compare-ratios',
   'nw-data',
   'hud-total-compare-ratios',
-  'hud-national-totals',
   'hud-field-office',
   'enc-data',
 ]);
