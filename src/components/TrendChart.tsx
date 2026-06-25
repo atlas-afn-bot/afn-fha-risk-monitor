@@ -57,7 +57,18 @@ export default function TrendChart({ history }: Props) {
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="month" tick={{ fontSize: 11 }} interval={Math.max(0, Math.floor(chartData.length / 8))} />
+            <XAxis
+              dataKey="month"
+              tick={{ fontSize: 11 }}
+              ticks={(() => {
+                const step = Math.max(1, Math.floor(chartData.length / 8));
+                const labels: string[] = [];
+                for (let i = 0; i < chartData.length; i += step) labels.push(chartData[i].month);
+                const last = chartData[chartData.length - 1]?.month;
+                if (last && labels[labels.length - 1] !== last) labels.push(last);
+                return labels;
+              })()}
+            />
             <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11 }} />
             <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
             <Legend />
