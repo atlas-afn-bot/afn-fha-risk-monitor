@@ -42,4 +42,7 @@ export const historicalTrend = [
   { month: 'Dec 2025', overall: 153, retail: 102, wholesale: 183 },
   { month: 'Jan 2026', overall: 145, retail: 97, wholesale: 173 },
   { month: 'Feb 2026', overall: 145, retail: 95, wholesale: 174 },
+  { month: 'Mar 2026', overall: 147, retail: 94, wholesale: 179 },
+  { month: 'Apr 2026', overall: 151, retail: 98, wholesale: 184 },
+  { month: 'May 2026', overall: 156, retail: 97, wholesale: 190 },
 ];
