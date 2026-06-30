@@ -324,33 +324,129 @@ function computeOffices(
 
     if (hudEntry) {
       // Committee methodology: remove Enhanced Guidelines loans from BOTH
-      // numerator (DLQ) AND denominator (total loans UW)
-      // Use Encompass-derived counts for accuracy (matches committee data source)
+      // numerator (DLQ) AND denominator (total loans UW).
+      //
+      // ── HUD-aggregate universe (June 2026 fix, reported by Stefanie Allman) ──
+      // Previously this branch mixed sources: Encompass counts in the
+      // num/denom, but HUD's `hud_office_dq_pct` as the area divisor. When
+      // Encompass and HUD disagree on loan counts (e.g. a late-closing loan
+      // booked after HUD's window cutoff), the Revised CR drifted from the
+      // Original CR even when zero loans were removed — "phantom drift".
+      //
+      // Concrete bug: Dallas May 2026. Encompass=106 loans (34R/72S), HUD=105
+      // (33R/72S). totalRemoved=0. Original CR=247, but old code produced
+      // Revised CR=245.
+      //
+      // Lara's ask: "exclude loans not in both Encompass and HUD." True per-
+      // loan set intersection is impossible (HUD ships aggregate counts only,
+      // no roster). Using HUD's aggregate counts as the universe achieves the
+      // same end — any Encompass-only loan is effectively excluded because
+      // it's never counted toward the universe in the first place.
+      //
+      // Out of scope here: the Boost+EG+DLQ filter itself, and "Pattern 1"
+      // offices with legit removals that drop massively (separate methodology
+      // conversation with the HUD Compare Ratio Committee).
       const hudAreaDQPct = hudEntry.hudOfficeDQPct; // already in %
       const areaRetailDQ = hudEntry.areaRetailDQPct; // already in %
       const areaWSDQ = hudEntry.areaSponsoredDQPct; // already in %
 
-      // Use Encompass counts (total/retail.length/ws.length) for denominators
-      // These match the committee's data source
-      const totalRemoved = retailRemoved + wsRemoved;
-      const revisedTotalLoans = total - totalRemoved;
-      const revisedTotalDLQCount = totalDLQ - totalRemoved;
-      revisedTotalDQPct = revisedTotalLoans > 0 ? (revisedTotalDLQCount / revisedTotalLoans) * 100 : 0;
-      revisedTotalCR = hudAreaDQPct > 0 ? Math.round(revisedTotalDQPct / hudAreaDQPct * 100) : totalCR;
+      const hudTotalLoans = hudEntry.totalLoansUW;
+      const hudTotalDLQ = hudEntry.totalDLQ;
+      const hudRetailLoans = hudEntry.retailLoans;
+      const hudRetailDLQ = hudEntry.retailDLQ;
+      const hudWSLoans = hudEntry.sponsoredLoans;
+      const hudWSDLQ = hudEntry.sponsoredDLQ;
 
-      // Revised retail: remove retail removed from both num & denom
-      const revisedRetailLoans = retail.length - retailRemoved;
-      const revisedRetailDLQCount = retailDLQ - retailRemoved;
-      const retailDQPct = revisedRetailLoans > 0 ? (revisedRetailDLQCount / revisedRetailLoans) * 100 : 0;
-      revisedRetailDQPct = revisedRetailLoans > 0 ? retailDQPct : null;
-      revisedRetailCR = areaRetailDQ > 0 && revisedRetailLoans > 0 ? Math.round(retailDQPct / areaRetailDQ * 100) : retailCR;
+      // Guardrail 4: fall back to legacy Encompass-based recompute if HUD
+      // didn't supply a usable office DQ% or a usable loans_count. Preserves
+      // current behavior for offices without complete HUD data instead of
+      // crashing or returning NaN.
+      const hudUniverseUsable = hudAreaDQPct > 0 && hudTotalLoans > 0;
 
-      // Revised WS: remove ws removed from both num & denom
-      const revisedWSLoans = ws.length - wsRemoved;
-      const revisedWSDLQCount = wsDLQ - wsRemoved;
-      const wsDQPct = revisedWSLoans > 0 ? (revisedWSDLQCount / revisedWSLoans) * 100 : 0;
-      revisedWSDQPct = revisedWSLoans > 0 ? wsDQPct : null;
-      revisedWSCR = areaWSDQ > 0 && revisedWSLoans > 0 ? Math.round(wsDQPct / areaWSDQ * 100) : wsCR;
+      if (hudUniverseUsable) {
+        // Guardrail 1: cap removals at the HUD universe size. Should never
+        // happen in practice (we'd be claiming to remove more loans than HUD
+        // says exist in the office) but guard so a data anomaly can't push
+        // the denominator negative.
+        let capRetailRemoved = retailRemoved;
+        let capWSRemoved = wsRemoved;
+        if (capRetailRemoved > hudRetailLoans) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[computeData] ${name}: retailRemoved (${capRetailRemoved}) exceeds HUD retail_loans (${hudRetailLoans}); clamping.`,
+          );
+          capRetailRemoved = hudRetailLoans;
+        }
+        if (capWSRemoved > hudWSLoans) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[computeData] ${name}: wsRemoved (${capWSRemoved}) exceeds HUD sponsored_loans (${hudWSLoans}); clamping.`,
+          );
+          capWSRemoved = hudWSLoans;
+        }
+        const totalRemoved = capRetailRemoved + capWSRemoved;
+
+        // Total CR — HUD universe in num & denom.
+        const revisedTotalLoans = hudTotalLoans - totalRemoved;
+        // Guardrails 2 & 3: floor numerator and denominator at 0.
+        const revisedTotalDLQCount = Math.max(0, hudTotalDLQ - totalRemoved);
+        if (revisedTotalLoans <= 0) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[computeData] ${name}: revisedTotalLoans <= 0 after HUD-universe subtraction; defaulting Revised CR to 0.`,
+          );
+          revisedTotalDQPct = 0;
+          revisedTotalCR = 0;
+        } else {
+          revisedTotalDQPct = (revisedTotalDLQCount / revisedTotalLoans) * 100;
+          revisedTotalCR = Math.round((revisedTotalDQPct / hudAreaDQPct) * 100);
+        }
+
+        // Retail CR — HUD retail universe in num & denom.
+        const revisedRetailLoans = hudRetailLoans - capRetailRemoved;
+        const revisedRetailDLQCount = Math.max(0, hudRetailDLQ - capRetailRemoved);
+        if (revisedRetailLoans <= 0) {
+          revisedRetailDQPct = null;
+          revisedRetailCR = areaRetailDQ > 0 ? 0 : retailCR;
+        } else {
+          const retailDQPct = (revisedRetailDLQCount / revisedRetailLoans) * 100;
+          revisedRetailDQPct = retailDQPct;
+          revisedRetailCR = areaRetailDQ > 0 ? Math.round((retailDQPct / areaRetailDQ) * 100) : retailCR;
+        }
+
+        // Sponsored (Wholesale) CR — HUD sponsored universe in num & denom.
+        const revisedWSLoans = hudWSLoans - capWSRemoved;
+        const revisedWSDLQCount = Math.max(0, hudWSDLQ - capWSRemoved);
+        if (revisedWSLoans <= 0) {
+          revisedWSDQPct = null;
+          revisedWSCR = areaWSDQ > 0 ? 0 : wsCR;
+        } else {
+          const wsDQPct = (revisedWSDLQCount / revisedWSLoans) * 100;
+          revisedWSDQPct = wsDQPct;
+          revisedWSCR = areaWSDQ > 0 ? Math.round((wsDQPct / areaWSDQ) * 100) : wsCR;
+        }
+      } else {
+        // HUD area DQ% or loans_count missing/0 — preserve the legacy
+        // Encompass-based recompute exactly as it was before the universe
+        // change. (This branch was previously the only path.)
+        const totalRemoved = retailRemoved + wsRemoved;
+        const revisedTotalLoans = total - totalRemoved;
+        const revisedTotalDLQCount = totalDLQ - totalRemoved;
+        revisedTotalDQPct = revisedTotalLoans > 0 ? (revisedTotalDLQCount / revisedTotalLoans) * 100 : 0;
+        revisedTotalCR = hudAreaDQPct > 0 ? Math.round((revisedTotalDQPct / hudAreaDQPct) * 100) : totalCR;
+
+        const revisedRetailLoans = retail.length - retailRemoved;
+        const revisedRetailDLQCount = retailDLQ - retailRemoved;
+        const retailDQPct = revisedRetailLoans > 0 ? (revisedRetailDLQCount / revisedRetailLoans) * 100 : 0;
+        revisedRetailDQPct = revisedRetailLoans > 0 ? retailDQPct : null;
+        revisedRetailCR = areaRetailDQ > 0 && revisedRetailLoans > 0 ? Math.round((retailDQPct / areaRetailDQ) * 100) : retailCR;
+
+        const revisedWSLoans = ws.length - wsRemoved;
+        const revisedWSDLQCount = wsDLQ - wsRemoved;
+        const wsDQPct = revisedWSLoans > 0 ? (revisedWSDLQCount / revisedWSLoans) * 100 : 0;
+        revisedWSDQPct = revisedWSLoans > 0 ? wsDQPct : null;
+        revisedWSCR = areaWSDQ > 0 && revisedWSLoans > 0 ? Math.round((wsDQPct / areaWSDQ) * 100) : wsCR;
+      }
     } else {
       // No HUD data — fall back to proportional scaling for the CR, but still
       // compute the SDQ% from the same removed-loan math so the audit column
