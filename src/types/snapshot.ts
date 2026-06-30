@@ -396,6 +396,22 @@ export interface IndemnificationLoan {
   channel: 'Retail' | 'Wholesale' | null;
 }
 
+/**
+ * One LLM-generated insight surfaced in the AI Insights panel above the
+ * portfolio-composition tables. Produced by `scripts/build-snapshot.py` via
+ * the AFN LiteLLM proxy; rendered by `src/components/AIInsights.tsx`.
+ */
+export interface AIInsight {
+  /** Lucide-react icon name (must match a key in the component's ICON_MAP). */
+  icon: string;
+  /** Visual tone — maps to the red/yellow/blue/green color treatments. */
+  tone: 'red' | 'yellow' | 'blue' | 'green';
+  /** Short headline (≤ 80 chars). */
+  title: string;
+  /** 1–2 sentence supporting detail (≤ 280 chars). */
+  body: string;
+}
+
 /** Per-sponsored-originator (TPO) rollup from NW Data 2 sponsor columns. */
 export interface SponsorTPODetailRow {
   sponsor_originator_name: string;
@@ -406,6 +422,7 @@ export interface SponsorTPODetailRow {
   sdq_count: number;
   sdq_pct: number | null;
   compare_ratio: number | null;
+}
 
 // ─── Root document ───────────────────────────────────────────────────────────
 
@@ -426,6 +443,12 @@ export interface Snapshot {
   indemnification_loans?: IndemnificationLoan[];
   /** NW Data extension — per-sponsored-originator (TPO) detail rollup. */
   sponsor_tpo_detail?: SponsorTPODetailRow[];
+  /**
+   * AI-generated narrative findings rendered by the AI Insights panel.
+   * Optional for forward-compat: snapshots produced before the AI feature
+   * shipped (or builds where the LLM proxy was unreachable) may omit it.
+   */
+  ai_insights?: AIInsight[];
   loans: Loan[];
 }
 
