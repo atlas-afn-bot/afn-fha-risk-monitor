@@ -1247,6 +1247,273 @@ def _enrich_branch_rows(branch_rows: List[dict], loans: List[dict],
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# AI Insights — LLM-generated narrative findings
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Allowed Lucide icon names. Keep this list in sync with the AIInsights
+# component's `ICON_MAP` so unknown icons can't render as blanks.
+_AI_INSIGHT_ICONS = {
+    "TrendingUp", "TrendingDown", "AlertTriangle", "Users", "Layers",
+    "MapPin", "Building2", "DollarSign", "ShieldAlert", "Activity",
+    "BarChart3", "Target", "Flame", "Sparkles",
+}
+_AI_INSIGHT_TONES = {"red", "yellow", "blue", "green"}
+
+_FALLBACK_AI_INSIGHTS = [
+    {
+        "icon": "Sparkles",
+        "tone": "blue",
+        "title": "AI insights unavailable",
+        "body": "Live AI analysis could not run for this snapshot. Underlying compare-ratio, delinquency, and DPA data is fully populated — review the panels below for risk findings.",
+    },
+]
+
+
+def _round(v: Any, n: int = 1) -> Any:
+    try:
+        return round(float(v), n)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_ai_facts(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Distill the snapshot into a compact facts payload for the LLM.
+
+    We intentionally pre-aggregate so the model never sees raw loan rows
+    and the prompt stays well under any context budget.
+    """
+    facts: Dict[str, Any] = {}
+    facts["period"] = snapshot["snapshot_meta"]["label"]
+
+    # ── Company / channel compare ratios ──
+    by_scope = {r["scope"]: r for r in snapshot.get("compare_ratios_total", [])}
+    facts["compare_ratio_total"] = {
+        "company": _round(by_scope.get("total", {}).get("compare_ratio")),
+        "retail": _round(by_scope.get("retail", {}).get("compare_ratio")),
+        "sponsor_wholesale": _round(by_scope.get("sponsor", {}).get("compare_ratio")),
+        "total_loans": by_scope.get("total", {}).get("loans_count"),
+        "total_delinquent": by_scope.get("total", {}).get("delinquent_count"),
+    }
+
+    # ── HOC roll-up ──
+    facts["compare_ratio_by_hoc"] = [
+        {
+            "hoc": r["hoc_name"],
+            "compare_ratio": _round(r.get("compare_ratio")),
+            "retail_ratio": _round(r.get("retail_ratio")),
+            "sponsor_ratio": _round(r.get("sponsor_ratio")),
+            "loans": r.get("loans_count"),
+            "delinquent": r.get("delinquent_count"),
+        }
+        for r in snapshot.get("compare_ratios_hoc", [])
+    ]
+
+    # ── Top 10 HUD offices by compare ratio (≥30 loans) ──
+    offices = [
+        o for o in snapshot.get("compare_ratios_hud_office", [])
+        if (o.get("loans_count") or 0) >= 30 and o.get("compare_ratio") is not None
+    ]
+    offices.sort(key=lambda o: -(o.get("compare_ratio") or 0))
+    facts["top_hud_offices_by_compare_ratio"] = [
+        {
+            "office": o["hud_office"],
+            "hoc": o.get("hoc"),
+            "compare_ratio": _round(o.get("compare_ratio")),
+            "loans": o.get("loans_count"),
+            "delinquent": o.get("delinquent_count"),
+        }
+        for o in offices[:10]
+    ]
+
+    # ── DPA program concentration & delinquency ──
+    dpa_slices = [
+        s for s in snapshot.get("portfolio_slices", [])
+        if s.get("dimension") == "dpa_program"
+    ]
+    facts["dpa_program_concentration"] = [
+        {
+            "program": s["bucket"],
+            "loans": s.get("combined_population"),
+            "delinquent": s.get("combined_delinquent"),
+            "dq_pct": _round(s.get("combined_pct"), 2),
+            "baseline_dq_pct": _round(s.get("baseline_combined"), 2),
+            "delta_vs_baseline": _round(s.get("baseline_comparison_combined"), 2),
+            "retail_dq_pct": _round(s.get("retail_pct"), 2),
+            "wholesale_dq_pct": _round(s.get("wholesale_pct"), 2),
+        }
+        for s in dpa_slices
+        if (s.get("combined_population") or 0) >= 20  # drop noise
+    ]
+
+    # ── Channel split ──
+    facts["channel_split"] = [
+        {
+            "channel": s["bucket"],
+            "loans": s.get("combined_population"),
+            "delinquent": s.get("combined_delinquent"),
+            "dq_pct": _round(s.get("combined_pct"), 2),
+        }
+        for s in snapshot.get("portfolio_slices", [])
+        if s.get("dimension") == "channel"
+    ]
+
+    # ── FICO bucket distribution (delinquency lens) ──
+    facts["fico_buckets"] = [
+        {
+            "bucket": s["bucket"],
+            "loans": s.get("combined_population"),
+            "dq_pct": _round(s.get("combined_pct"), 2),
+            "delta_vs_baseline": _round(s.get("baseline_comparison_combined"), 2),
+        }
+        for s in snapshot.get("portfolio_slices", [])
+        if s.get("dimension") == "fico" and (s.get("combined_population") or 0) >= 50
+    ]
+
+    # ── Top problem LOs (≥30 loans, sorted by delta-vs-baseline) ──
+    los = [
+        l for l in snapshot.get("loan_officer_performance", [])
+        if (l.get("funded_count") or 0) >= 30
+        and (l.get("baseline_comparison") or 0) > 0
+    ]
+    los.sort(key=lambda l: -(l.get("baseline_comparison") or 0))
+    facts["top_outlier_loan_officers"] = [
+        {
+            "name": l.get("lo_name"),
+            "channel": l.get("channel"),
+            "funded": l.get("funded_count"),
+            "delinquent": l.get("delinquent_count"),
+            "dq_pct": _round(l.get("delinquency_pct"), 2),
+            "delta_vs_baseline": _round(l.get("baseline_comparison"), 2),
+        }
+        for l in los[:8]
+    ]
+
+    # ── Risk-indicator distribution (count of stacked indicators per loan) ──
+    facts["risk_indicator_distribution"] = [
+        {
+            "indicator_count": r["indicator_count"],
+            "loans": r.get("loans_count"),
+            "dq_pct": _round(r.get("delinquency_pct"), 2),
+        }
+        for r in snapshot.get("risk_indicator_distribution", [])
+        if (r.get("loans_count") or 0) > 0
+    ]
+
+    return facts
+
+
+def _normalize_ai_insight(item: Any) -> Optional[Dict[str, str]]:
+    """Validate one model-returned insight, dropping junk silently."""
+    if not isinstance(item, dict):
+        return None
+    icon = str(item.get("icon") or "").strip()
+    tone = str(item.get("tone") or "").strip().lower()
+    title = str(item.get("title") or "").strip()
+    body = str(item.get("body") or "").strip()
+    if icon not in _AI_INSIGHT_ICONS:
+        icon = "Sparkles"
+    if tone not in _AI_INSIGHT_TONES:
+        tone = "blue"
+    if not title or not body:
+        return None
+    return {"icon": icon, "tone": tone, "title": title, "body": body}
+
+
+def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Generate 4 AI insights via the AFN LiteLLM proxy.
+
+    Reads ``AFN_LITELLM_API_KEY`` from the environment and posts to the
+    internal proxy. Falls back to a single placeholder insight on any
+    failure so the snapshot build never breaks.
+    """
+    api_key = os.environ.get("AFN_LITELLM_API_KEY")
+    if not api_key:
+        print("  WARN: AFN_LITELLM_API_KEY not set — skipping AI insights")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        print("  WARN: openai package not installed — skipping AI insights")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    base_url = os.environ.get("AFN_LITELLM_BASE_URL", "http://100.120.169.17:4000/v1")
+    model = os.environ.get("AFN_LITELLM_INSIGHT_MODEL", "gpt-4o")
+
+    facts = _build_ai_facts(snapshot)
+    system_prompt = (
+        "You are a credit-risk analyst writing for AFN's FHA Risk Committee. "
+        "You will be given a single month's pre-aggregated FHA portfolio facts "
+        "(HUD compare ratios, delinquency rates, DPA concentrations, channel "
+        "mix, HUD field-office hotspots, and outlier loan officers). "
+        "Generate EXACTLY 4 distinct, non-overlapping insights that a risk "
+        "manager would actually surface in the next committee meeting. "
+        "Each insight must reference at least one concrete number from the "
+        "facts (compare ratio, dq %, loan count, etc.). Avoid generic "
+        "statements; call out specific HOCs, HUD offices, or DPA programs. "
+        "Prioritize: (1) compare-ratio outliers, (2) delinquency anomalies, "
+        "(3) DPA program concentration / drift, (4) channel or geographic "
+        "concentration. "
+        "Return strict JSON of the form: "
+        '{"insights": [{"icon": <one of: ' + ", ".join(sorted(_AI_INSIGHT_ICONS)) + '>, '
+        '"tone": <one of: red|yellow|green|blue>, '
+        '"title": <short headline, ≤ 80 chars>, '
+        '"body": <2 sentences max, ≤ 280 chars>}]}.\n\n'
+        "Tone guidance: 'red' = material risk needing action, 'yellow' = "
+        "watch-item / drift, 'blue' = neutral structural observation, "
+        "'green' = positive / improving trend."
+    )
+    user_prompt = json.dumps(facts, indent=2, default=str)
+
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
+        print(f"  Calling LiteLLM proxy ({base_url}, model={model})…")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            max_tokens=1200,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"  WARN: AI insight call failed ({e!r}) — falling back")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Strip code fences if the model wrapped the JSON
+        cleaned = raw.strip().strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            print("  WARN: LLM returned non-JSON — falling back")
+            return list(_FALLBACK_AI_INSIGHTS)
+
+    items = parsed.get("insights") if isinstance(parsed, dict) else parsed
+    if not isinstance(items, list):
+        print("  WARN: LLM JSON missing 'insights' list — falling back")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    insights = [n for n in (_normalize_ai_insight(i) for i in items) if n is not None]
+    if not insights:
+        print("  WARN: LLM returned 0 valid insights — falling back")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    # Cap at 4. Pad with the fallback shape if model under-delivered.
+    insights = insights[:4]
+    if len(insights) < 4:
+        print(f"  NOTE: LLM returned {len(insights)} insights (expected 4)")
+    return insights
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1378,6 +1645,11 @@ def main() -> int:
     snapshot["indemnification_loans"] = indemnification_loans
     snapshot["sponsor_tpo_detail"] = sponsor_tpo_detail
     snapshot["loans"] = loans
+
+    # ── AI insights (LLM-generated narrative findings) ──
+    print("Generating AI insights…")
+    snapshot["ai_insights"] = build_ai_insights(snapshot)
+    print(f"  {len(snapshot['ai_insights'])} insight(s) produced")
 
     # ── Write ──
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)

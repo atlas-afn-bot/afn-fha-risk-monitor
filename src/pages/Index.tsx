@@ -376,7 +376,7 @@ export default function Index() {
                       <SummaryCards data={data} snapshot={snapshot} />
                       <ExecutiveSummary data={data} period={selectedPeriod} />
                       <TrendChart history={hudHistory} />
-                      <AIInsights />
+                      <AIInsights snapshot={snapshot} />
                       <PortfolioComposition data={data} />
                       <DPAProviderTable programs={data.dpaPrograms} overallDQRate={data.overallDQRate} />
                       <ChannelAnalysis retail={data.retailSummary} wholesale={data.wsSummary} />
