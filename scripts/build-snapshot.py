@@ -1399,11 +1399,85 @@ def _build_ai_facts(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         if (r.get("loans_count") or 0) > 0
     ]
 
+    # ── Projections ─ forward-looking risk at 1/3/6mo × best/base/worst ──
+    # Pre-aggregated so the LLM can flag offices projected to cross 150/200
+    # without seeing raw loan rows.
+    proj = snapshot.get("projections") or {}
+    if proj:
+        facts["projection_assumptions"] = proj.get("assumptions")
+        # Top 8 offices projected to be in breach/watch at 3mo base.
+        proj_offices = proj.get("offices") or []
+        top_3mo_base = sorted(
+            [
+                o for o in proj_offices
+                if o["horizons"]["3mo"]["scenarios"]["base"]["projected_threshold_status"]
+                in ("breach", "watch")
+            ],
+            key=lambda o: -(
+                o["horizons"]["3mo"]["scenarios"]["base"]["projected_compare_ratio"] or 0
+            ),
+        )[:8]
+        facts["projections_top_offices_3mo_base"] = [
+            {
+                "office": o["office_name"],
+                "hoc": o["hoc"],
+                "loan_count": o["loan_count_current"],
+                "current_compare_ratio": o["current_compare_ratio"],
+                "current_status": o["current_threshold_status"],
+                "projected_dropoffs_3mo": o["horizons"]["3mo"]["projected_dropoffs"],
+                "projected_compare_ratio_3mo_base": o["horizons"]["3mo"]["scenarios"]["base"]["projected_compare_ratio"],
+                "projected_compare_ratio_3mo_worst": o["horizons"]["3mo"]["scenarios"]["worst"]["projected_compare_ratio"],
+                "projected_compare_ratio_3mo_best": o["horizons"]["3mo"]["scenarios"]["best"]["projected_compare_ratio"],
+                "projected_status_3mo_base": o["horizons"]["3mo"]["scenarios"]["base"]["projected_threshold_status"],
+                "projected_status_3mo_worst": o["horizons"]["3mo"]["scenarios"]["worst"]["projected_threshold_status"],
+            }
+            for o in top_3mo_base
+        ]
+        # Offices currently safe that cross into watch/breach at any horizon/scenario.
+        crossings_flat: List[Dict[str, Any]] = []
+        for o in proj_offices:
+            for c in o.get("threshold_crossings") or []:
+                crossings_flat.append({
+                    "office": o["office_name"],
+                    "hoc": o["hoc"],
+                    "loan_count": o["loan_count_current"],
+                    "horizon_months": c["horizon_months"],
+                    "scenario": c["scenario"],
+                    "from_status": c["from_status"],
+                    "to_status": c["to_status"],
+                    "current_compare_ratio": c["current_compare_ratio"],
+                    "projected_compare_ratio": c["projected_compare_ratio"],
+                })
+        # Prioritize: safe→breach, then safe→watch, then watch→breach; by CR desc.
+        def _cross_prio(c: Dict[str, Any]) -> Tuple[int, float]:
+            pri = {("safe", "breach"): 0, ("safe", "watch"): 1, ("watch", "breach"): 2}
+            return (pri.get((c["from_status"], c["to_status"]), 9),
+                    -(c["projected_compare_ratio"] or 0))
+        crossings_flat.sort(key=_cross_prio)
+        facts["projections_threshold_crossings"] = crossings_flat[:12]
+        # HOC-level roll-up for orientation.
+        facts["projections_by_hoc_3mo"] = [
+            {
+                "hoc": name,
+                "current_compare_ratio": block.get("current_compare_ratio"),
+                "projected_compare_ratio_base": block["horizons"]["3mo"]["scenarios"]["base"]["projected_compare_ratio"],
+                "projected_compare_ratio_worst": block["horizons"]["3mo"]["scenarios"]["worst"]["projected_compare_ratio"],
+                "projected_compare_ratio_best": block["horizons"]["3mo"]["scenarios"]["best"]["projected_compare_ratio"],
+                "projected_dropoffs": block["horizons"]["3mo"]["projected_dropoffs"],
+            }
+            for name, block in (proj.get("hocs") or {}).items()
+        ]
+
     return facts
 
 
-def _normalize_ai_insight(item: Any) -> Optional[Dict[str, str]]:
-    """Validate one model-returned insight, dropping junk silently."""
+def _normalize_ai_insight(item: Any) -> Optional[Dict[str, Any]]:
+    """Validate one model-returned insight, dropping junk silently.
+
+    Backwards-compatible with the pre-projections schema (icon/tone/title/body).
+    When present, the extended projection fields are validated and included;
+    unknown extras are dropped so the UI can rely on a stable shape.
+    """
     if not isinstance(item, dict):
         return None
     icon = str(item.get("icon") or "").strip()
@@ -1416,7 +1490,54 @@ def _normalize_ai_insight(item: Any) -> Optional[Dict[str, str]]:
         tone = "blue"
     if not title or not body:
         return None
-    return {"icon": icon, "tone": tone, "title": title, "body": body}
+    out: Dict[str, Any] = {"icon": icon, "tone": tone, "title": title, "body": body}
+
+    # ── Extended projection fields (all optional) ──
+    def _opt_num(v: Any) -> Optional[float]:
+        try:
+            return None if v is None else float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _opt_int(v: Any) -> Optional[int]:
+        try:
+            return None if v is None else int(v)
+        except (TypeError, ValueError):
+            return None
+
+    projected_ratio = _opt_num(item.get("projected_ratio"))
+    horizon_months = _opt_int(item.get("horizon_months"))
+    if horizon_months not in (1, 3, 6, None):
+        horizon_months = None
+    scenario = str(item.get("scenario") or "").strip().lower() or None
+    if scenario not in ("best", "base", "worst", None):
+        scenario = None
+    crosses_threshold_val = item.get("crosses_threshold")
+    if crosses_threshold_val is None:
+        crosses_threshold: Optional[int] = None
+    else:
+        # Accept either an integer (150/200) or a bool (rare from the LLM).
+        try:
+            cti = int(crosses_threshold_val)
+            crosses_threshold = cti if cti in (150, 200) else None
+        except (TypeError, ValueError):
+            crosses_threshold = None
+    confidence = str(item.get("confidence") or "").strip().lower() or None
+    if confidence not in ("low", "medium", "high", None):
+        confidence = None
+
+    # Only attach when at least one extended field is non-null — keeps the
+    # legacy shape tidy for non-projection insights.
+    if any(
+        v is not None
+        for v in (projected_ratio, horizon_months, scenario, crosses_threshold, confidence)
+    ):
+        out["projected_ratio"] = projected_ratio
+        out["horizon_months"] = horizon_months
+        out["scenario"] = scenario
+        out["crosses_threshold"] = crosses_threshold
+        out["confidence"] = confidence
+    return out
 
 
 def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -1441,6 +1562,26 @@ def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
     model = os.environ.get("AFN_LITELLM_INSIGHT_MODEL", "gpt-4o")
 
     facts = _build_ai_facts(snapshot)
+    has_projections = bool(snapshot.get("projections"))
+    projection_guidance = (
+        " You are also given forward-looking projections at 1/3/6-month horizons "
+        "under best/base/worst scenarios (the \u00b110% delinquency lever). "
+        "AT LEAST ONE of the 4 insights MUST be projection-based: specifically, "
+        "flag any office that is currently safe (< 150) but projects to cross "
+        "150 or 200 under any scenario within 3 or 6 months, or any currently-watch "
+        "office (150\u2013199) projecting to breach 200. Cite the projected compare "
+        "ratio, horizon, and scenario by name in the body. When your insight is "
+        "projection-based, ALSO populate these extra JSON fields on the insight: "
+        "`projected_ratio` (number), `horizon_months` (1|3|6), "
+        "`scenario` ('best'|'base'|'worst'), "
+        "`crosses_threshold` (150 or 200, whichever is crossed), and "
+        "`confidence` ('low'|'medium'|'high' \u2014 use 'high' for offices with >=100 "
+        "loans and consistent base/worst signal, 'medium' otherwise, 'low' for "
+        "offices with fewer than 30 loans). Leave those fields off for non-projection "
+        "insights."
+        if has_projections
+        else ""
+    )
     system_prompt = (
         "You are a credit-risk analyst writing for AFN's FHA Risk Committee. "
         "You will be given a single month's pre-aggregated FHA portfolio facts "
@@ -1453,8 +1594,9 @@ def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
         "statements; call out specific HOCs, HUD offices, or DPA programs. "
         "Prioritize: (1) compare-ratio outliers, (2) delinquency anomalies, "
         "(3) DPA program concentration / drift, (4) channel or geographic "
-        "concentration. "
-        "Return strict JSON of the form: "
+        "concentration."
+        + projection_guidance
+        + " Return strict JSON of the form: "
         '{"insights": [{"icon": <one of: ' + ", ".join(sorted(_AI_INSIGHT_ICONS)) + '>, '
         '"tone": <one of: red|yellow|green|blue>, '
         '"title": <short headline, ≤ 80 chars>, '
@@ -1645,6 +1787,26 @@ def main() -> int:
     snapshot["indemnification_loans"] = indemnification_loans
     snapshot["sponsor_tpo_detail"] = sponsor_tpo_detail
     snapshot["loans"] = loans
+
+    # ── Projections ─ loan-level → office/HOC/national aggregation ──
+    # Must run before ai_insights so the LLM prompt can see projected data.
+    print("Computing projections (1/3/6mo × best/base/worst)…")
+    try:
+        from build_projections import build_projections  # sibling module
+    except ImportError:
+        # Fallback: script may be invoked from a working directory outside
+        # scripts/. Explicitly add the scripts dir to sys.path and retry.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from build_projections import build_projections  # type: ignore
+    snapshot["projections"] = build_projections(snapshot)
+    _proj_n_offices = len(snapshot["projections"]["offices"])
+    _proj_n_crossings = sum(
+        len(o["threshold_crossings"]) for o in snapshot["projections"]["offices"]
+    )
+    print(
+        f"  {_proj_n_offices} offices projected, "
+        f"{_proj_n_crossings} threshold-crossing events"
+    )
 
     # ── AI insights (LLM-generated narrative findings) ──
     print("Generating AI insights…")

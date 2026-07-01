@@ -400,6 +400,11 @@ export interface IndemnificationLoan {
  * One LLM-generated insight surfaced in the AI Insights panel above the
  * portfolio-composition tables. Produced by `scripts/build-snapshot.py` via
  * the AFN LiteLLM proxy; rendered by `src/components/AIInsights.tsx`.
+ *
+ * Projection-based insights carry the extended `projected_ratio` /
+ * `horizon_months` / `scenario` / `crosses_threshold` / `confidence` fields
+ * so the UI can render them with the Projections tab treatment. Legacy
+ * insights (pre-projections) omit these and should render as-before.
  */
 export interface AIInsight {
   /** Lucide-react icon name (must match a key in the component's ICON_MAP). */
@@ -410,6 +415,18 @@ export interface AIInsight {
   title: string;
   /** 1–2 sentence supporting detail (≤ 280 chars). */
   body: string;
+
+  // ── Projection extension (all optional; present only on projection-based insights) ──
+  /** Projected office Compare Ratio the insight cites (e.g. 163). */
+  projected_ratio?: number | null;
+  /** Horizon (months) the projection references — 1, 3, or 6. */
+  horizon_months?: 1 | 3 | 6 | null;
+  /** Scenario the projection references — 'best' / 'base' / 'worst'. */
+  scenario?: 'best' | 'base' | 'worst' | null;
+  /** Threshold this insight highlights an office crossing — 150 or 200. */
+  crosses_threshold?: 150 | 200 | null;
+  /** LLM's stated confidence in the projection ('low' / 'medium' / 'high'). */
+  confidence?: 'low' | 'medium' | 'high' | null;
 }
 
 /** Per-sponsored-originator (TPO) rollup from NW Data 2 sponsor columns. */
@@ -449,7 +466,110 @@ export interface Snapshot {
    * shipped (or builds where the LLM proxy was unreachable) may omit it.
    */
   ai_insights?: AIInsight[];
+  /**
+   * Forward-looking Compare Ratio projections at 1/3/6-month horizons
+   * under best/base/worst scenarios. Computed loan-level and aggregated up.
+   * Optional for forward-compat with snapshots produced before the
+   * projections feature shipped.
+   */
+  projections?: SnapshotProjections;
   loans: Loan[];
+}
+
+// ─── Projections ─────────────────────────────────────────────────────────
+// Produced by `scripts/build_projections.py` (invoked from `build-snapshot.py`).
+// Keep in sync with the Python module's output shape.
+
+export type ProjectionHorizon = '1mo' | '3mo' | '6mo';
+export type ProjectionScenario = 'best' | 'base' | 'worst';
+export type ProjectionStatus = 'safe' | 'watch' | 'breach' | 'unknown';
+
+export interface ProjectionScenarioResult {
+  projected_numerator: number;
+  projected_denominator: number;
+  projected_delinquency_rate: number | null;
+  projected_compare_ratio: number | null;
+  projected_threshold_status: ProjectionStatus;
+}
+
+export interface ProjectionHorizonBlock {
+  current_loans_in_window: number;
+  current_delinquent: number;
+  projected_dropoffs: number;
+  projected_loans_in_window: number;
+  projected_delinquent_base: number;
+  scenarios: Record<ProjectionScenario, ProjectionScenarioResult>;
+}
+
+export interface ProjectionThresholdCrossing {
+  horizon_months: 1 | 3 | 6;
+  scenario: ProjectionScenario;
+  from_status: ProjectionStatus;
+  to_status: ProjectionStatus;
+  current_compare_ratio: number | null;
+  projected_compare_ratio: number | null;
+}
+
+export interface ProjectionOffice {
+  office_id: string;
+  office_name: string;
+  hoc: string | null;
+  loan_count_current: number;
+  delinquent_count_current: number;
+  current_compare_ratio: number | null;
+  current_threshold_status: ProjectionStatus;
+  horizons: Record<ProjectionHorizon, ProjectionHorizonBlock>;
+  threshold_crossings: ProjectionThresholdCrossing[];
+}
+
+export interface ProjectionHocBlock {
+  hoc_name: string;
+  current_compare_ratio: number | null;
+  current_threshold_status: ProjectionStatus;
+  horizons: Record<ProjectionHorizon, ProjectionHorizonBlock>;
+}
+
+export interface ProjectionLoan {
+  loan_id: string;
+  fha_case_number: string | null;
+  office_id: string | null;
+  office_name: string | null;
+  hoc: string | null;
+  channel: 'Retail' | 'Wholesale' | null;
+  first_payment_due_date: string | null;
+  months_until_falls_off: number | null;
+  current_delinquency_status: {
+    is_delinquent: boolean;
+    is_seriously_delinquent: boolean;
+    months_delinquent: number | null;
+    delinquent_status: string | null;
+  };
+  will_fall_off_by_horizon: Record<ProjectionHorizon, boolean>;
+  projected_in_window_by_horizon: Record<ProjectionHorizon, boolean>;
+  projected_delinquent_at_horizon_base: Record<ProjectionHorizon, boolean>;
+}
+
+export interface SnapshotProjections {
+  generated_at: string;
+  generated_by: string;
+  performance_period: string;
+  horizons: number[];
+  scenarios: ProjectionScenario[];
+  assumptions: {
+    hud_window_months: number;
+    scenario_stress_pct: number;
+    scenario_semantics: Record<ProjectionScenario, string>;
+    national_reference_policy: string;
+    threshold_watch: number;
+    threshold_breach: number;
+    compare_ratio_formula: string;
+    missing_first_payment_date_policy: string;
+  };
+  current_compare_ratio_total: number | null;
+  national: Record<ProjectionHorizon, ProjectionHorizonBlock>;
+  hocs: Record<string, ProjectionHocBlock>;
+  offices: ProjectionOffice[];
+  loans: ProjectionLoan[];
 }
 
 // ─── Index document (public/data/snapshots/index.json) ───────────────────────
