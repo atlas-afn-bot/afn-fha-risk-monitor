@@ -30,6 +30,7 @@ import BranchCompareRatios, {
 import DeepDive, { type DeepDiveSubTab } from '@/components/tabs/DeepDive';
 import Delinquencies from '@/components/tabs/Delinquencies';
 import FileUploads from '@/components/tabs/FileUploads';
+import Projections from '@/components/tabs/Projections';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
   Moon, Sun, FileDown, Loader2, AlertTriangle,
@@ -42,6 +43,7 @@ type TabId =
   | 'branches-hud'
   | 'deep-dive'
   | 'delinquencies'
+  | 'projections'
   | 'uploads';
 
 const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
@@ -51,6 +53,7 @@ const TAB_DEFS: Array<{ id: TabId; emoji: string; label: string }> = [
   { id: 'branches-hud', emoji: '🏬', label: 'Branch Compare Ratios' },
   { id: 'deep-dive',    emoji: '👥', label: 'Loan Data Deep Dive' },
   { id: 'delinquencies', emoji: '⚠️', label: 'Delinquencies' },
+  { id: 'projections',  emoji: '🔮', label: 'Projections' },
   { id: 'uploads',      emoji: '📤', label: 'File Uploads' },
 ];
 
@@ -452,6 +455,15 @@ export default function Index() {
                     <div className="space-y-6">
                       <TabSummary tabId="delinquencies" snapshot={snapshot} data={data} />
                       <Delinquencies snapshot={snapshot} data={data} />
+                    </div>
+                  )}
+                </TabsContent>
+
+                {/* Projections — forward-looking Compare Ratio + scenarios. */}
+                <TabsContent value="projections">
+                  {visited.has('projections') && (
+                    <div className="space-y-6">
+                      <Projections snapshot={snapshot} />
                     </div>
                   )}
                 </TabsContent>
