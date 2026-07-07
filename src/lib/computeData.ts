@@ -64,6 +64,11 @@ export function buildDashboardFromSnapshot(snapshot: Snapshot): DashboardData {
   dashboard.delinquencyReasonRollup = snapshot.delinquency_reason_rollup;
   dashboard.indemnificationLoans = snapshot.indemnification_loans;
   dashboard.sponsorTPODetail = snapshot.sponsor_tpo_detail;
+  // Forward v2 projections straight through so downstream surfaces (PDF
+  // export, future dashboard widgets) can consume them without needing the
+  // raw Snapshot in scope. Optional — snapshots pre-dating the projections
+  // feature simply leave this undefined and consumers degrade gracefully.
+  dashboard.projections = snapshot.projections;
 
   // Portfolio-level HUD compare ratios (Total / Retail / Sponsor).
   // Surfaced on DashboardData so the PDF Total CR slot populates instead of

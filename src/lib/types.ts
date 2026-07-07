@@ -233,6 +233,15 @@ export interface DashboardData {
   delinquencyReasonRollup?: import('@/types/snapshot').DelinquencyReasonRollupRow[];
   indemnificationLoans?: import('@/types/snapshot').IndemnificationLoan[];
   sponsorTPODetail?: import('@/types/snapshot').SponsorTPODetailRow[];
+  /**
+   * Forward-looking Compare Ratio projections at 1/3/6-month horizons under
+   * best/base/worst scenarios (from `snapshot.projections`, backend PR #29).
+   *
+   * Optional so snapshots produced before that ship still build a valid
+   * DashboardData. PDF export and any future dashboard surfaces that need
+   * this data should feature-detect it and degrade gracefully when absent.
+   */
+  projections?: import('@/types/snapshot').SnapshotProjections;
 }
 
 
