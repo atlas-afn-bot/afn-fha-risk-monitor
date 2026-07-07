@@ -560,6 +560,14 @@ export interface SnapshotProjections {
     scenario_stress_pct: number;
     scenario_semantics: Record<ProjectionScenario, string>;
     national_reference_policy: string;
+    /** HUD's national delinquency rate (fraction, e.g. 0.0341) used as the
+     * denominator for national- and HOC-scope projected Compare Ratios.
+     * Reverse-engineered from `compare_ratios_total[scope=total]`; held
+     * constant across scenarios and horizons. */
+    hud_national_dq_rate: number | null;
+    /** Same as `hud_national_dq_rate`, expressed as a percentage. */
+    hud_national_dq_rate_pct: number | null;
+    hud_national_dq_rate_source: string;
     threshold_watch: number;
     threshold_breach: number;
     compare_ratio_formula: string;

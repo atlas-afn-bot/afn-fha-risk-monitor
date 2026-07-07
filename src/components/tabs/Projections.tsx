@@ -149,8 +149,10 @@ export default function Projections({ snapshot }: Props) {
 
       {/* Footer disclaimer */}
       <div className="text-[10px] text-muted-foreground italic border-t border-border pt-3">
-        Projections based on First Payment Due Date roll-off + ±10% scenario stress applied
-        office-side only (national reference held flat). Not a guarantee.
+        Projections based on First Payment Due Date roll-off + ±10% scenario stress. Compare
+        Ratios at every scope (office / HOC / national) use HUD's national reference dq
+        rate as peer benchmark, held constant across scenarios and horizons. Not a
+        guarantee.
         Snapshot: {snapshot.snapshot_meta.label} · generated{' '}
         {new Date(snapshot.snapshot_meta.generated_at).toLocaleString()}.
       </div>

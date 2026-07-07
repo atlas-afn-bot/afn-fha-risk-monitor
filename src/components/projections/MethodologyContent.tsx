@@ -17,7 +17,7 @@ interface Props {
  * Content sources:
  *   - Formula / semantics come from Michael's decisions locked in
  *     during the backend design review (Compare Ratio only, ±10% lever,
- *     national held flat, drill-down mandatory).
+ *     HUD-anchored peer benchmark, drill-down mandatory).
  *   - Assumption bullets are pulled live from `projections.assumptions`
  *     so this stays in sync with `scripts/build_projections.py`.
  */
@@ -64,21 +64,31 @@ export default function MethodologyContent({ snapshot, projections, full = false
         full={full}
       >
         <p className="text-xs leading-relaxed text-muted-foreground">
-          The projected office Compare Ratio uses the same shape HUD uses today, just with
-          projected numerator/denominator:
+          The projected Compare Ratio uses the same shape HUD uses today, just with a
+          projected numerator:
         </p>
         <pre className="mt-2 text-[11px] font-mono bg-muted/40 border border-border rounded-md p-3 whitespace-pre-wrap">
-{`Projected Compare Ratio = (office projected_delinquency_rate)
-                        / (national projected_delinquency_rate)
-                        × 100`}
+{`Projected CR = (AFN projected_delinquency_rate at scope)
+             / (HUD national_dq_rate)   ← held constant
+             × 100
+
+Applies uniformly at office / HOC / national scope.`}
         </pre>
         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          <strong className="text-foreground">National reference is held flat per horizon</strong>{' '}
-          — the ±10% delinquency lever is applied <em>only</em> to the office numerator, not
-          to the national reference. This preserves the interpretation that "worst" is a
-          genuine worst-case <em>for that office</em> against a stable peer benchmark, rather
-          than a portfolio-wide macro shock (which would move national in lockstep and
-          artificially suppress office CRs).
+          <strong className="text-foreground">All scopes are anchored to HUD's national reference
+          dq rate</strong>{' '}
+          — the same peer benchmark HUD uses to compute today's headline Compare Ratio,
+          reverse-engineered from the snapshot's Compare Ratio Total identity and held
+          constant across scenarios, horizons, and offices. This makes projected Compare
+          Ratios directly comparable to today's HUD-reported CRs at every scope.
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          <strong className="text-foreground">Numerator methodology note:</strong>{' '}
+          Projected numerators use AFN's Encompass DQ flag directly (simple count of
+          delinquent loans in-window). HUD's <em>current</em> Compare Ratios use their own
+          SDQ methodology with a mix adjustment, so the projected CR under a flat-book
+          base scenario may not exactly reproduce today's HUD-reported office CR — the gap
+          is methodology, not roll-forward.
         </p>
       </Section>
 
@@ -167,9 +177,14 @@ loan_falls_off_at_H ⟺ first_payment_due_date < cutoff_H`}
             all offices belonging to that HOC.
           </li>
           <li>
-            <strong className="text-foreground">National numerator/denominator</strong> = sum
-            of every loan's base-scenario projection across the whole portfolio. National is
-            the fixed reference for all three scenarios (best/base/worst) at every horizon.
+            <strong className="text-foreground">Numerator (any scope)</strong> = # AFN loans
+            classified delinquent at horizon under the scenario (the ±10% lever moves this
+            number).
+          </li>
+          <li>
+            <strong className="text-foreground">Denominator (any scope)</strong> = HUD's
+            national dq rate — a single constant across scenarios, horizons, and offices,
+            reverse-engineered from the snapshot's Compare Ratio Total identity.
           </li>
           <li>
             The loan-level accordion on this tab lets you verify each office aggregate by hand

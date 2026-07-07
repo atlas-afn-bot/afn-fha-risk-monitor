@@ -31,13 +31,23 @@ missing ``first_payment_date`` are assumed to remain in-window
 Scenarios (Michael's ±10% delinquency lever)
 --------------------------------------------
 
-The ±10% lever is **office-side only** — it stresses each office's projected
-numerator without moving the national reference. This preserves the
-interpretation that "worst" is a genuine worst-case for the office: if this
-office deteriorates while the rest of the country stays flat, does it
-cross 150 or 200?  (A portfolio-wide shock would move national in lockstep,
-artificially suppressing office CRs — that's a stress test for the whole
-country, not for AFN. Michael's spec is the office view.)
+The ±10% lever is applied to the **AFN projected numerator** at every scope
+(office, HOC, national). The peer benchmark used in every scope's Compare
+Ratio denominator is HUD's national reference delinquency rate (the same
+reference HUD uses to compute today's headline Compare Ratio) — held
+constant across scenarios, horizons, and offices because HUD doesn't roll
+their reference in AFN's monthly snapshot. Under this setup:
+
+* office CR at scenario S = (office AFN dq rate under S) / (HUD national dq rate) × 100
+* HOC CR at scenario S    = (HOC AFN dq rate under S)    / (HUD national dq rate) × 100
+* national CR at scenario S = (AFN portfolio dq rate under S) / (HUD national dq rate) × 100
+
+Base national CR reproduces today's headline (~150s) instead of collapsing
+to 100, so committee readers can compare projections directly to the
+current snapshot's Compare Ratio Total. Worst/best produce a genuine spread
+at every scope. Office projected CRs are directly comparable to the HUD
+Office Compare Ratios rendered in the headline dashboard (both use the
+same HUD anchor).
 
 For each office we start from the loans still in-window at horizon ``H``:
 
@@ -51,17 +61,16 @@ For each office we start from the loans still in-window at horizon ``H``:
 Aggregation
 -----------
 
-* Numerator (office) = # loans classified delinquent at horizon under the
-  scenario.
-* Denominator (office) = # loans still in the rolled-forward 24-mo window at
-  horizon.
-* National numerator / denominator = sum of every loan's *base-scenario*
-  projection across the whole portfolio (regardless of office). National is
-  the fixed reference for **all three scenarios** at every horizon.
-* Office delinquency rate = numerator / denominator.
-* National delinquency rate = national numerator / national denominator.
-* **Projected Compare Ratio = office_dq_rate / national_dq_rate * 100**
-  — same formula HUD uses today, just with projected numerator/denominator.
+* Numerator (office/HOC/national) = # AFN loans classified delinquent at
+  horizon under the scenario.
+* Denominator (office/HOC/national) = # AFN loans still in the
+  rolled-forward 24-mo window at horizon.
+* Peer benchmark = HUD's national delinquency rate, reverse-engineered from
+  today's snapshot Compare Ratio Total identity
+  ``hud_national_dq_rate = current_afn_dq_rate / (current_compare_ratio / 100)``.
+  Held constant across scenarios and horizons.
+* **Projected Compare Ratio = afn_projected_dq_rate / hud_national_dq_rate * 100**
+  — same formula HUD uses today, just with a projected AFN numerator.
 
 Output shape
 ------------
@@ -381,6 +390,32 @@ def _build_grouped_block(
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _hud_national_dq_rate(snapshot: Dict[str, Any]) -> Optional[float]:
+    """Reverse-engineer HUD's national delinquency rate from the snapshot's
+    Total Compare Ratio identity:
+
+        current_compare_ratio = (afn_dq_rate / hud_national_dq_rate) * 100
+
+    So ``hud_national_dq_rate = afn_dq_rate / (compare_ratio / 100)``.
+
+    Returns a fraction (e.g. 0.0341 for 3.41%) or None if the snapshot lacks
+    the fields needed to compute it. HUD does not publish their national
+    reference directly in the monthly AFN snapshot; this identity is the
+    contractual reverse-lookup.
+    """
+    for r in snapshot.get("compare_ratios_total") or []:
+        if r.get("scope") != "total":
+            continue
+        loans = r.get("loans_count") or 0
+        dq = r.get("delinquent_count") or 0
+        cr = r.get("compare_ratio")
+        if loans <= 0 or dq <= 0 or not cr or cr <= 0:
+            return None
+        afn_rate = dq / loans
+        return afn_rate / (cr / 100.0)
+    return None
+
+
 def build_projections(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """Compute the ``projections`` block for `snapshot`.
 
@@ -411,36 +446,47 @@ def build_projections(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             current_total_cr = r.get("compare_ratio")
             break
 
-    # 3) National aggregation — MUST happen before office CR calcs so we have
-    #    the national dq rate that anchors each Compare Ratio at each horizon.
-    #    National reference stays at BASE across all scenarios (see module
-    #    docstring): the ±10% lever is an office-side stress, not a
-    #    country-wide one.
-    national_rates_by_horizon: Dict[int, Dict[str, float]] = {}
+    # 2b) Peer benchmark — HUD's national delinquency rate, reverse-engineered
+    #     from the snapshot's Compare Ratio Total identity. Held constant
+    #     across scenarios and horizons (HUD doesn't roll their reference in
+    #     AFN's monthly snapshot). Used as the denominator for national and
+    #     HOC-scope Compare Ratios so those numbers are directly comparable
+    #     to today's headline (~156 for May 2026) instead of collapsing to 100.
+    hud_national_rate = _hud_national_dq_rate(snapshot)
+
+    # 3) National aggregation — anchored to HUD's national reference so the
+    #    projected national Compare Ratio is directly comparable to today's
+    #    headline number. The ±10% lever moves the AFN numerator; the HUD
+    #    denominator is held constant across scenarios/horizons.
+    #
+    #    Every scope (office, HOC, national) uses the same HUD-anchored
+    #    rate table as its Compare Ratio denominator. This makes office
+    #    projected CRs directly comparable to today's HUD Office Compare
+    #    Ratios on the headline dashboard.
+    scope_national_rates_by_horizon: Dict[int, Dict[str, float]] = {
+        h: {sc: (hud_national_rate or 0.0) for sc in SCENARIOS} for h in HORIZONS
+    }
     national_blocks: Dict[str, Any] = {}
     for h in HORIZONS:
         in_win_total, in_win_dq = _aggregate_at_horizon(loan_projections, h)
-        base_num, base_den = _project_scenario_counts(in_win_total, in_win_dq, "base")
-        base_rate = (base_num / base_den) if base_den > 0 else 0.0
-        # Same base rate is used as the national reference for all 3 scenarios.
-        national_rates_by_horizon[h] = {sc: base_rate for sc in SCENARIOS}
         scenarios_block: Dict[str, Any] = {}
         for sc in SCENARIOS:
             num, den = _project_scenario_counts(in_win_total, in_win_dq, sc)
             rate = (num / den) if den > 0 else 0.0
+            # National Compare Ratio at scenario S = AFN portfolio dq rate
+            # under S divided by HUD's national reference dq rate. Under base
+            # this reproduces (approximately) today's headline Compare Ratio;
+            # under best/worst the ±10% lever produces a genuine spread.
+            if hud_national_rate and hud_national_rate > 0 and den > 0:
+                cr = round((rate / hud_national_rate) * 100, 1)
+            else:
+                cr = None
             scenarios_block[sc] = {
                 "projected_numerator": num,
                 "projected_denominator": den,
                 "projected_delinquency_rate": round(rate * 100, 4) if den > 0 else None,
-                # National Compare Ratio at scenario S = (national_S / national_base) * 100.
-                # Under base this is 100 by construction. Under worst/best it
-                # reflects the notional country-wide stress used to render a
-                # peer group of offices; it's illustrative only, since the
-                # office CRs are computed against the base national rate.
-                "projected_compare_ratio": (
-                    round((rate / base_rate) * 100, 1) if base_rate > 0 else None
-                ),
-                "projected_threshold_status": "safe",
+                "projected_compare_ratio": cr,
+                "projected_threshold_status": _classify_threshold(cr),
             }
         national_blocks[f"{h}mo"] = {
             "current_loans_in_window": len(loan_projections),
@@ -464,7 +510,12 @@ def build_projections(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         if hoc:
             by_hoc[hoc].append(lp)
 
-    hoc_block = _build_grouped_block(dict(by_hoc), national_rates_by_horizon)
+    # HOC blocks use the HUD anchor (same as national + office). The ±10%
+    # lever is applied to the HOC's AFN projected numerator, and the
+    # denominator is HUD's constant national reference rate. This gives HOC
+    # CR the same semantics as the headline Compare Ratio Total (directly
+    # comparable to today's per-HOC CRs).
+    hoc_block = _build_grouped_block(dict(by_hoc), scope_national_rates_by_horizon)
     # Attach current CR to HOCs
     hoc_out: Dict[str, Any] = {}
     for name, per_h in hoc_block.items():
@@ -481,7 +532,7 @@ def build_projections(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         per_h = {}
         for h in HORIZONS:
             per_h[f"{h}mo"] = _build_office_horizon_block(
-                office_loans_view, h, national_rates_by_horizon[h]
+                office_loans_view, h, scope_national_rates_by_horizon[h]
             )
         # HOC lookup: any loan in the office knows its HOC.
         hoc_name = next(
@@ -554,23 +605,40 @@ def build_projections(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             "base": "no delinquency change; only 24-mo window rolls forward",
             "worst": (
                 f"+{int(STRESS_PCT*100)}% of currently-non-delinquent, still-in-window loans "
-                "become delinquent at horizon (office-side stress only; national reference held flat)"
+                "become delinquent at horizon (AFN numerator stress applied at every scope; "
+                "HUD national reference held constant)"
             ),
             "best": (
                 f"-{int(STRESS_PCT*100)}% of currently-delinquent, still-in-window loans "
-                "cure at horizon (office-side stress only; national reference held flat)"
+                "cure at horizon (AFN numerator stress applied at every scope; HUD national "
+                "reference held constant)"
             ),
         },
         "national_reference_policy": (
-            "national delinquency rate is fixed at the BASE-scenario projection for each horizon "
-            "across all three scenarios (best/base/worst). The ±10% lever is applied office-side "
-            "only, so 'worst' reflects a genuine worst-case for that office against a stable peer."
+            "Compare Ratio denominators at every scope (office / HOC / national) use HUD's "
+            "national delinquency rate as the peer benchmark, reverse-engineered from today's "
+            "Compare Ratio Total identity (afn_dq_rate / (current_compare_ratio / 100)). This "
+            "HUD anchor is held constant across scenarios, horizons, and offices — HUD does "
+            "not roll their reference in AFN's monthly snapshot. The ±10% lever moves the AFN "
+            "numerator at every scope. Office projected CRs are directly comparable to the "
+            "HUD Office Compare Ratios shown in the headline dashboard."
+        ),
+        "hud_national_dq_rate": (
+            round(hud_national_rate, 6) if hud_national_rate is not None else None
+        ),
+        "hud_national_dq_rate_pct": (
+            round(hud_national_rate * 100, 4) if hud_national_rate is not None else None
+        ),
+        "hud_national_dq_rate_source": (
+            "reverse-engineered from compare_ratios_total[scope=total].compare_ratio and "
+            "delinquent_count/loans_count"
         ),
         "threshold_watch": THRESHOLD_WATCH,
         "threshold_breach": THRESHOLD_BREACH,
         "compare_ratio_formula": (
-            "office_delinquency_rate / national_delinquency_rate * 100 "
-            "(office rate follows scenario; national rate is base-scenario at the same horizon)"
+            "afn_projected_delinquency_rate / hud_national_dq_rate * 100 "
+            "(applies uniformly at office / HOC / national scope; HUD anchor is a single "
+            "constant across scenarios, horizons, and offices)"
         ),
         "missing_first_payment_date_policy": (
             "loans without a parseable first_payment_date are assumed to stay in-window "
