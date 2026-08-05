@@ -14,9 +14,10 @@ jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
     name: Build and Deploy (prod)
-    environment:
-      name: production
-      url: https://fha-monitor.afnai.com
+    # environment: production  # disabled 2026-08-05 — GitHub Team plan does not
+    # support required-reviewers on environments for private repos. Approval is
+    # enforced via branch protection on `main` instead. Re-enable this block if
+    # the org upgrades to GitHub Enterprise Cloud.
     steps:
       - uses: actions/checkout@v4
 
