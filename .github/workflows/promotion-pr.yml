@@ -80,6 +80,11 @@ jobs:
           BODY: ${{ steps.diff.outputs.body }}
         run: |
           set -euo pipefail
+          # Ensure `promotion` label exists (idempotent)
+          gh label create promotion --color 0e8a16 \
+            --description "Standing dev→main promotion PR" \
+            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
           EXISTING=$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // ""')
           TITLE="Promote dev → main (${{ steps.diff.outputs.commit_count }} commits)"
           if [ -z "$EXISTING" ]; then
@@ -89,7 +94,7 @@ jobs:
               --head dev \
               --title "$TITLE" \
               --body "$BODY" \
-              --label promotion
+              --label promotion || true
           else
             echo "Updating existing promotion PR #$EXISTING"
             gh pr edit "$EXISTING" \
