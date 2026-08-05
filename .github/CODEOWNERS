@@ -1,0 +1,20 @@
+# CODEOWNERS — afn-fha-risk-monitor
+#
+# Michael Kunisaki is the standing owner of this project.
+# Julian Domingo drives changes but works through ATLAS (no direct GitHub identity).
+# All PRs targeting `main` must originate from `dev` (see branch protections)
+# and require CODEOWNER approval.
+
+# Default owner for everything
+*                          @mkunisakiafn
+
+# Domain-critical paths
+/src/pages/scenarios/      @mkunisakiafn
+/src/lib/computeData.ts    @mkunisakiafn
+/src/lib/exportPDF.ts      @mkunisakiafn
+
+# Infrastructure & config — extra care
+/.github/workflows/        @mkunisakiafn
+/staticwebapp.config.json  @mkunisakiafn
+/infra/                    @mkunisakiafn
+/.github/CODEOWNERS        @mkunisakiafn

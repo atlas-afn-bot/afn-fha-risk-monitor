@@ -1,0 +1,43 @@
+name: Deploy — Prod
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# Only one prod deploy runs at a time
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    name: Build and Deploy (prod)
+    environment:
+      name: production
+      url: https://fha-monitor.afnai.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install and Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to Prod SWA
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "/dist"
+          api_location: "api"
+          output_location: ""
+          skip_app_build: true

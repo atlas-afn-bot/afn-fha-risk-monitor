@@ -1,0 +1,99 @@
+name: Promotion PR — maintain standing dev → main PR
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  maintain_promotion_pr:
+    runs-on: ubuntu-latest
+    name: Open/update standing promotion PR
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: dev
+
+      - name: Ensure main is fetched
+        run: git fetch origin main:refs/remotes/origin/main --depth=100
+
+      - name: Compute commit diff (main..dev)
+        id: diff
+        run: |
+          set -euo pipefail
+          COMMITS=$(git log --oneline origin/main..HEAD || true)
+          COMMIT_COUNT=$(printf "%s\n" "$COMMITS" | grep -c . || echo 0)
+          {
+            echo "commit_count=$COMMIT_COUNT"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo 'body<<PROMOTION_BODY_EOF'
+            echo "## Standing promotion PR: \`dev\` → \`main\`"
+            echo
+            echo "This PR is auto-maintained by [\`promotion-pr.yml\`](../blob/dev/.github/workflows/promotion-pr.yml)."
+            echo "Every push to \`dev\` refreshes this description; merging this PR triggers a"
+            echo "\`production\` environment approval gate before the prod deploy fires."
+            echo
+            echo "**Approvers (any one):** @mkunisakiafn · @mgruberafn · @carce-afn"
+            echo
+            echo "**Commits ahead of \`main\`:** ${COMMIT_COUNT}"
+            echo
+            echo "_Last refreshed: $(date -u +'%Y-%m-%dT%H:%M:%SZ') by promotion-pr workflow_"
+            echo
+            echo '### Commits pending promotion'
+            echo
+            echo '```'
+            if [ -n "$COMMITS" ]; then
+              printf "%s\n" "$COMMITS"
+            else
+              echo '(no commits ahead of main — this PR will auto-close on merge or stay idle)'
+            fi
+            echo '```'
+            echo
+            echo '### Promotion checklist'
+            echo
+            echo '- [ ] Reviewed with Michael'
+            echo '- [ ] Regression check: baseline dashboard matches current prod screenshot'
+            echo '- [ ] No unexpected new snapshot data'
+            echo '- [ ] Session-tested on Chrome + Edge'
+            echo '- [ ] Rollback plan: revert the promotion commit on `main` if anything breaks'
+            echo
+            echo '---'
+            echo
+            echo '_Do NOT rebase or force-push this PR. Merge with squash to keep `main` linear._'
+            echo 'PROMOTION_BODY_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Skip if no commits ahead
+        if: steps.diff.outputs.commit_count == '0'
+        run: echo "No commits ahead of main; nothing to do."
+
+      - name: Upsert standing promotion PR
+        if: steps.diff.outputs.commit_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.diff.outputs.body }}
+        run: |
+          set -euo pipefail
+          EXISTING=$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // ""')
+          TITLE="Promote dev → main (${{ steps.diff.outputs.commit_count }} commits)"
+          if [ -z "$EXISTING" ]; then
+            echo "No open promotion PR found — creating one."
+            gh pr create \
+              --base main \
+              --head dev \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --label promotion
+          else
+            echo "Updating existing promotion PR #$EXISTING"
+            gh pr edit "$EXISTING" \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --add-label promotion || true
+          fi
