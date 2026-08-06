@@ -41,8 +41,22 @@ import {
   LogIn,
   ShieldAlert,
   X,
+  Play,
 } from 'lucide-react';
-import { triggerNwCheck } from '@/lib/api';
+import {
+  triggerNwCheck,
+  getNwTriggerStatus,
+  type NwTriggerStatus,
+} from '@/lib/api';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 // Month-name lookup used only for the NW auto-trigger success toast.
 const MONTH_NAMES = [
@@ -231,6 +245,50 @@ async function checkNwTrigger(monthFolder: string): Promise<void> {
     // Network errors on the trigger check are non-fatal for the upload
     // itself; keep quiet so the user's upload-success UI stays clean.
   }
+}
+
+// ─── Manual-trigger button hook ────────────────────────────────────────
+//
+// Polls the GET status probe on mount and whenever the selected month
+// changes. `refreshKey` gives the parent a manual re-fetch hook so we
+// can update after a successful upload without forcing a full remount.
+
+type NwButtonState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; status: NwTriggerStatus };
+
+function useNwTriggerStatus(month: string, refreshKey: number): {
+  state: NwButtonState;
+  reload: () => void;
+} {
+  const [state, setState] = useState<NwButtonState>({ kind: 'loading' });
+  const [tick, setTick] = useState(0);
+
+  const reload = useCallback(() => setTick((t) => t + 1), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ kind: 'loading' });
+    (async () => {
+      try {
+        const status = await getNwTriggerStatus(month);
+        if (!cancelled) setState({ kind: 'ready', status });
+      } catch (e) {
+        if (!cancelled) {
+          setState({
+            kind: 'error',
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [month, refreshKey, tick]);
+
+  return { state, reload };
 }
 
 function extractEmail(principal: any): string | null {
@@ -428,6 +486,195 @@ function SlotCard({ def, status, monthFolder, onFile, onClear }: SlotCardProps) 
   );
 }
 
+// ─── Manual NW trigger button + dialog ─────────────────────────────
+
+interface ManualNwTriggerButtonProps {
+  monthFolder: string;
+  state: NwButtonState;
+  onClick: () => void;
+  onRefresh: () => void;
+}
+
+function ManualNwTriggerButton({
+  monthFolder,
+  state,
+  onClick,
+  onRefresh,
+}: ManualNwTriggerButtonProps) {
+  // Derived state from the status probe.
+  const loading = state.kind === 'loading';
+  const errored = state.kind === 'error';
+  const status = state.kind === 'ready' ? state.status : null;
+  const complete = status ? status.allSlotsComplete : false;
+  const missing = status ? status.missing : [];
+  const encExists = status ? status.encDataExists : false;
+
+  // Button is disabled while probing, on probe error, or when the
+  // completeness check hasn't been satisfied yet.
+  const disabled = loading || errored || !complete;
+
+  // Variant + tooltip depend on the three ready-state branches.
+  let variant: 'default' | 'destructive' | 'secondary' | 'outline' = 'default';
+  let tooltip = `Trigger Neighborhood Watch for ${monthDisplay(monthFolder)}`;
+  if (loading) {
+    tooltip = 'Checking upload status…';
+  } else if (errored) {
+    tooltip = 'Could not reach the trigger status probe. Click refresh to retry.';
+  } else if (!complete) {
+    tooltip = 'Upload all 5 HUD files first';
+  } else if (encExists) {
+    variant = 'destructive';
+    tooltip = 'Enc_Data already exists — clicking will regenerate';
+  }
+
+  const missingLabel =
+    missing.length > 0
+      ? ` (missing ${missing.length}/5: ${missing.join(', ')})`
+      : '';
+
+  return (
+    <div
+      className="bg-card rounded-lg border border-border p-5 flex items-center justify-between gap-4 flex-wrap"
+      data-testid="nw-manual-trigger-panel"
+    >
+      <div className="flex-1 min-w-0">
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Neighborhood Watch report
+        </h4>
+        <p className="text-[11px] text-muted-foreground mt-1">
+          {loading && 'Checking upload status…'}
+          {errored &&
+            'Could not reach the trigger status probe. Try refreshing.'}
+          {!loading && !errored && complete && !encExists && (
+            <>
+              All 5 HUD files are in place for{' '}
+              <span className="font-mono">{monthFolder}</span>. Click to
+              enqueue the Neighborhood Watch bot.
+            </>
+          )}
+          {!loading && !errored && complete && encExists && (
+            <>
+              An <span className="font-mono">Enc_Data</span> file already
+              exists for <span className="font-mono">{monthFolder}</span>.
+              Clicking will regenerate and overwrite it.
+            </>
+          )}
+          {!loading && !errored && !complete && (
+            <>
+              Waiting on{' '}
+              <span className="font-mono">{monthFolder}</span> HUD files{missingLabel}.
+            </>
+          )}
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onRefresh}
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Refresh trigger status"
+          title="Refresh trigger status"
+          type="button"
+        >
+          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+        <Button
+          onClick={onClick}
+          disabled={disabled}
+          variant={variant}
+          size="sm"
+          title={tooltip}
+          data-testid="nw-manual-trigger-button"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Checking…
+            </>
+          ) : (
+            <>
+              <Play className="w-3.5 h-3.5" />
+              Manually trigger Neighborhood Watch report
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+interface ManualNwTriggerDialogProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  monthFolder: string;
+  encDataExists: boolean;
+  pending: boolean;
+  onConfirm: () => void;
+}
+
+function ManualNwTriggerDialog({
+  open,
+  onOpenChange,
+  monthFolder,
+  encDataExists,
+  pending,
+  onConfirm,
+}: ManualNwTriggerDialogProps) {
+  const monthName = monthDisplay(monthFolder);
+
+  const title = encDataExists
+    ? `Re-generate Neighborhood Watch report for ${monthName}?`
+    : `Trigger Neighborhood Watch report for ${monthName}?`;
+
+  const body = encDataExists
+    ? `An Enc_Data file already exists for ${monthName}. Clicking Yes will queue the NW bot to regenerate and overwrite it. This action cannot be undone.`
+    : `This will queue the NW bot to generate the report for ${monthName}. You'll be emailed when it's ready.`;
+
+  const confirmLabel = encDataExists ? 'Yes, regenerate' : 'Yes, trigger';
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        onEscapeKeyDown={(e) => {
+          if (pending) e.preventDefault();
+        }}
+        onPointerDownOutside={(e) => {
+          if (pending) e.preventDefault();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{body}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant={encDataExists ? 'destructive' : 'default'}
+            onClick={onConfirm}
+            disabled={pending}
+            data-testid="nw-manual-trigger-confirm"
+          >
+            {pending ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Working…
+              </>
+            ) : (
+              confirmLabel
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
 
 export default function FileUploads() {
@@ -442,6 +689,15 @@ export default function FileUploads() {
   // Month selector — default to current UTC month, allow user to pick last 12.
   const months = useMemo(() => recentMonths(12), []);
   const [monthFolder, setMonthFolder] = useState<string>(currentMonthFolderUtc());
+
+  // Manual-trigger button state.
+  const [nwStatusRefreshKey, setNwStatusRefreshKey] = useState(0);
+  const { state: nwButtonState, reload: reloadNwStatus } = useNwTriggerStatus(
+    monthFolder,
+    nwStatusRefreshKey,
+  );
+  const [manualConfirmOpen, setManualConfirmOpen] = useState(false);
+  const [manualTriggering, setManualTriggering] = useState(false);
 
   // ── Auth bootstrap ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -615,9 +871,66 @@ export default function FileUploads() {
 
       // Refresh recent list after a successful PUT.
       loadRecent();
+      // The new upload may have completed the 5-slot set; refresh the
+      // manual-trigger button's status probe so it enables/disables
+      // without waiting for a tab remount.
+      setNwStatusRefreshKey((k) => k + 1);
     },
     [loadRecent, monthFolder],
   );
+
+  // Manual-trigger POST handler. Called when the user confirms in the dialog.
+  const runManualTrigger = useCallback(async () => {
+    setManualTriggering(true);
+    const encDataWasPresent =
+      nwButtonState.kind === 'ready' &&
+      nwButtonState.status.encDataExists === true;
+    try {
+      const { ok, status, body } = await triggerNwCheck(monthFolder, { force: true });
+      if (body && 'triggered' in body && body.triggered === true) {
+        if (encDataWasPresent) {
+          toast.success(
+            `✅ Neighborhood Watch report for ${monthDisplay(monthFolder)} is regenerating — ` +
+              `we'll email you when the updated version is live on this dashboard.`,
+          );
+        } else {
+          toast.success(
+            `✅ ${monthDisplay(monthFolder)} HUD inputs are complete. ` +
+              `Neighborhood Watch is now generating the report — we'll email you when it's live on this dashboard.`,
+          );
+        }
+        // Belt-and-suspenders: mark this month's toast as "already shown"
+        // so the auto-trigger doesn't fire a duplicate toast on the
+        // next upload.
+        nwToastShownForMonth.add(monthFolder);
+      } else if (body && 'missing' in body && Array.isArray(body.missing) && body.missing.length > 0) {
+        // Should not happen (button disabled when incomplete), but guard anyway.
+        toast.error(
+          `Can't trigger Neighborhood Watch — still missing ${body.missing.length} HUD file(s).`,
+        );
+      } else if (body && 'error' in body) {
+        toast.error(
+          `Neighborhood Watch trigger failed for ${monthDisplay(monthFolder)}. ` +
+            `RPA Support has been notified (ref: ${body.correlationId ?? 'n/a'}).`,
+        );
+      } else if (!ok) {
+        toast.error(`Neighborhood Watch trigger failed (HTTP ${status}).`);
+      }
+    } catch (e) {
+      toast.error(
+        `Neighborhood Watch trigger failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setManualTriggering(false);
+      setManualConfirmOpen(false);
+      // Re-probe status — after a successful force, the enc-data blob
+      // will get rewritten by the bot, so encDataExists will flip true
+      // once the bot finishes. Refresh now so the button reflects the
+      // marker-rewritten state; the enc-data check just polls the
+      // current blob state.
+      setNwStatusRefreshKey((k) => k + 1);
+    }
+  }, [monthFolder, nwButtonState]);
 
   const clearSlot = useCallback((slug: string) => {
     setSlotStatus((prev) => ({ ...prev, [slug]: { kind: 'idle' } }));
@@ -719,6 +1032,28 @@ export default function FileUploads() {
           />
         ))}
       </div>
+
+      {/* Manual Neighborhood Watch trigger button */}
+      <ManualNwTriggerButton
+        monthFolder={monthFolder}
+        state={nwButtonState}
+        onClick={() => setManualConfirmOpen(true)}
+        onRefresh={reloadNwStatus}
+      />
+
+      {/* Confirmation dialog */}
+      <ManualNwTriggerDialog
+        open={manualConfirmOpen}
+        onOpenChange={(v) => {
+          if (!manualTriggering) setManualConfirmOpen(v);
+        }}
+        monthFolder={monthFolder}
+        encDataExists={
+          nwButtonState.kind === 'ready' && nwButtonState.status.encDataExists === true
+        }
+        pending={manualTriggering}
+        onConfirm={runManualTrigger}
+      />
 
       {/* Recent uploads */}
       <div className="bg-card rounded-lg border border-border p-5 space-y-3">

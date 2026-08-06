@@ -40,10 +40,10 @@
       "methods": ["GET", "POST"]
     },
     {
-      "_comment": "Uploader auto-trigger: called by the signed-in user's browser right after each HUD file upload. Enqueues an AA WLM work item when all 5 slots are populated. Requires Entra SSO (unlike /api/files/* which is API-key gated for RPA).",
+      "_comment": "Uploader auto-trigger + manual-trigger button: called by the signed-in user's browser. POST enqueues an AA WLM work item when all 5 slots are populated (with optional force: true to bypass the marker-blob idempotency check). GET returns a lightweight status probe {allSlotsComplete, missing, encDataExists} used by the manual-trigger button's confirmation dialog. Requires Entra SSO (unlike /api/files/* which is API-key gated for RPA).",
       "route": "/api/nw-trigger-check",
       "allowedRoles": ["authenticated"],
-      "methods": ["POST"]
+      "methods": ["GET", "POST"]
     },
     {
       "route": "/api/files",

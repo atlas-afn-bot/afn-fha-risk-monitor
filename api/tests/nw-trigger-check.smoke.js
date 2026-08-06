@@ -58,7 +58,13 @@ function makeCtx() {
  * name suffixes (e.g. { 'hud-branches': ['a.xlsx'], 'nw-data': [] }).
  * Also supports a `markerExists` flag which the fake exists() honors.
  */
-function makeContainer({ slots = {}, markerExists = false, markerWriteWillThrow = false } = {}) {
+function makeContainer({
+  slots = {},
+  markerExists = false,
+  markerWriteWillThrow = false,
+  encDataBlobs = [],
+  markerMetadata = null,
+} = {}) {
   const blobs = [];
   for (const slot of REQUIRED_SLOTS) {
     const entries = slots[slot] || [];
@@ -77,16 +83,40 @@ function makeContainer({ slots = {}, markerExists = false, markerWriteWillThrow 
       });
     }
   }
+  // Enc-data blobs live under `{month}/enc-data/...`.
+  const encBlobs = [];
+  for (const entry of encDataBlobs) {
+    const spec = typeof entry === 'string' ? { name: entry } : entry;
+    const rel = spec.name || 'Enc_Data.xlsx';
+    encBlobs.push({
+      name: `${currentMonth()}/enc-data/${rel}`,
+      properties: {
+        contentLength: spec.size ?? 4096,
+        lastModified: new Date(spec.uploadedAt || '2026-08-02T12:00:00Z'),
+        contentType: 'application/octet-stream',
+      },
+    });
+  }
   const markerBlobs = new Set();
-  if (markerExists) markerBlobs.add(`${currentMonth()}/.nw-triggered`);
+  const markerMeta = new Map();
+  if (markerExists) {
+    markerBlobs.add(`${currentMonth()}/.nw-triggered`);
+    if (markerMetadata) {
+      markerMeta.set(`${currentMonth()}/.nw-triggered`, markerMetadata);
+    }
+  }
 
-  return {
+  const container = {
     _blobs: blobs,
+    _encBlobs: encBlobs,
     _markerBlobs: markerBlobs,
+    _markerMeta: markerMeta,
     _markerWriteWillThrow: markerWriteWillThrow,
+    _markerDeleteCalls: 0,
     listBlobsFlat(opts) {
       const prefix = (opts && opts.prefix) || '';
-      const matching = blobs.filter((b) => b.name.startsWith(prefix));
+      const pool = [...blobs, ...encBlobs];
+      const matching = pool.filter((b) => b.name.startsWith(prefix));
       return (async function* () {
         for (const b of matching) yield b;
       })();
@@ -94,6 +124,13 @@ function makeContainer({ slots = {}, markerExists = false, markerWriteWillThrow 
     getBlobClient(name) {
       return {
         exists: async () => markerBlobs.has(name),
+        deleteIfExists: async () => {
+          container._markerDeleteCalls += 1;
+          const had = markerBlobs.has(name);
+          markerBlobs.delete(name);
+          markerMeta.delete(name);
+          return { succeeded: had };
+        },
       };
     },
     getBlockBlobClient(name) {
@@ -103,12 +140,16 @@ function makeContainer({ slots = {}, markerExists = false, markerWriteWillThrow 
             throw new Error('simulated marker write failure');
           }
           markerBlobs.add(name);
-          this._lastMarkerOptions = options;
+          if (options && options.metadata) {
+            markerMeta.set(name, { ...options.metadata });
+          }
+          container._lastMarkerOptions = options;
           return {};
         },
       };
     },
   };
+  return container;
 }
 
 function currentMonth() {
@@ -558,10 +599,11 @@ function fullSlots() {
   }
 
   // ── Section 7: input validation ────────────────────────────────────────
+  // GET is now a supported status probe; only unsupported verbs return 405.
   {
     const ctx = makeCtx();
-    await handler(ctx, { method: 'GET', body: { month: '2026-08' } }, {});
-    record('validation: GET method → 405', ctx.res.status === 405,
+    await handler(ctx, { method: 'PUT', body: { month: '2026-08' } }, {});
+    record('validation: PUT method → 405', ctx.res.status === 405,
            `status=${ctx.res.status}`);
   }
 
@@ -577,6 +619,155 @@ function fullSlots() {
     await handler(ctx, { method: 'POST', body: {} }, {});
     record('validation: missing month → 400', ctx.res.status === 400,
            `status=${ctx.res.status}`);
+  }
+
+  // ── Section 8: GET status probe ────────────────────
+  {
+    // 5 slots, no enc-data → allSlotsComplete:true, missing:[], encDataExists:false, AA never called
+    const ctx = makeCtx();
+    const container = makeContainer({ slots: fullSlots() });
+    let aaTouched = false;
+    await handler(
+      ctx,
+      { method: 'GET', query: { month: '2026-08' } },
+      {
+        containerClient: container,
+        aa: {
+          authenticate: async () => { aaTouched = true; return 't'; },
+          enqueueWorkItem: async () => { aaTouched = true; return {}; },
+        },
+      },
+    );
+    const ok =
+      ctx.res.status === 200 &&
+      ctx.res.body.month === '2026-08' &&
+      ctx.res.body.allSlotsComplete === true &&
+      Array.isArray(ctx.res.body.missing) &&
+      ctx.res.body.missing.length === 0 &&
+      ctx.res.body.encDataExists === false &&
+      aaTouched === false;
+    record('GET probe: 5/5 no enc-data → complete, no encData, AA not called', ok,
+           `body=${JSON.stringify(ctx.res.body)} aaTouched=${aaTouched}`);
+  }
+
+  {
+    // 4/5 slots → allSlotsComplete:false, missing:[<slug>]
+    const ctx = makeCtx();
+    const slots = fullSlots();
+    slots['hoc-compare-ratios'] = [];
+    const container = makeContainer({ slots });
+    await handler(
+      ctx,
+      { method: 'GET', query: { month: '2026-08' } },
+      { containerClient: container },
+    );
+    const ok =
+      ctx.res.status === 200 &&
+      ctx.res.body.allSlotsComplete === false &&
+      Array.isArray(ctx.res.body.missing) &&
+      ctx.res.body.missing.length === 1 &&
+      ctx.res.body.missing[0] === 'hoc-compare-ratios' &&
+      ctx.res.body.encDataExists === false;
+    record('GET probe: 4/5 slots → incomplete, missing lists slug', ok,
+           `body=${JSON.stringify(ctx.res.body)}`);
+  }
+
+  {
+    // 5 slots + enc-data blob → encDataExists:true
+    const ctx = makeCtx();
+    const container = makeContainer({
+      slots: fullSlots(),
+      encDataBlobs: ['Enc_Data.xlsx'],
+    });
+    await handler(
+      ctx,
+      { method: 'GET', query: { month: '2026-08' } },
+      { containerClient: container },
+    );
+    const ok =
+      ctx.res.status === 200 &&
+      ctx.res.body.allSlotsComplete === true &&
+      ctx.res.body.encDataExists === true;
+    record('GET probe: 5/5 + enc-data present → encDataExists:true', ok,
+           `body=${JSON.stringify(ctx.res.body)}`);
+  }
+
+  {
+    // GET with bad month → 400
+    const ctx = makeCtx();
+    await handler(
+      ctx,
+      { method: 'GET', query: { month: 'nope' } },
+      { containerClient: makeContainer({ slots: fullSlots() }) },
+    );
+    record('GET probe: bad month query → 400', ctx.res.status === 400,
+           `status=${ctx.res.status}`);
+  }
+
+  // ── Section 9: POST force=true ────────────────────
+  {
+    // Marker exists + force:true → AA IS called, marker rewritten, {triggered:true, forced:true, aaWorkItemId}
+    const ctx = makeCtx();
+    const container = makeContainer({
+      slots: fullSlots(),
+      markerExists: true,
+      markerMetadata: { triggeredAt: '2026-07-01T00:00:00Z', correlationId: 'old-corr' },
+    });
+    let authCalled = false;
+    let enqueueCalled = false;
+    await handler(
+      ctx,
+      { method: 'POST', body: { month: '2026-08', force: true } },
+      {
+        containerClient: container,
+        aa: {
+          authenticate: async () => { authCalled = true; return 'tok'; },
+          enqueueWorkItem: async () => { enqueueCalled = true; return { aaWorkItemId: 'wi-force-1' }; },
+        },
+      },
+    );
+    const markerKey = `2026-08/.nw-triggered`;
+    const meta = container._markerMeta.get(markerKey);
+    const ok =
+      ctx.res.status === 200 &&
+      ctx.res.body.triggered === true &&
+      ctx.res.body.forced === true &&
+      ctx.res.body.aaWorkItemId === 'wi-force-1' &&
+      authCalled && enqueueCalled &&
+      container._markerBlobs.has(markerKey) &&
+      container._markerDeleteCalls >= 1 &&
+      meta && meta.triggeredAt !== '2026-07-01T00:00:00Z' &&
+      meta.correlationId !== 'old-corr';
+    record('force: marker exists + force:true → AA called, marker rewritten, forced:true', ok,
+           `status=${ctx.res.status} body=${JSON.stringify(ctx.res.body)} deleteCalls=${container._markerDeleteCalls}`);
+  }
+
+  {
+    // 4/5 slots + force:true → still returns {triggered:false, missing:[...]}. Force does NOT override completeness.
+    const ctx = makeCtx();
+    const slots = fullSlots();
+    slots['hud-field-office'] = [];
+    const container = makeContainer({ slots });
+    let aaTouched = false;
+    await handler(
+      ctx,
+      { method: 'POST', body: { month: '2026-08', force: true } },
+      {
+        containerClient: container,
+        aa: {
+          authenticate: async () => { aaTouched = true; return 't'; },
+          enqueueWorkItem: async () => { aaTouched = true; return {}; },
+        },
+      },
+    );
+    const ok =
+      ctx.res.status === 200 &&
+      ctx.res.body.triggered === false &&
+      Array.isArray(ctx.res.body.missing) &&
+      ctx.res.body.missing.includes('hud-field-office') &&
+      aaTouched === false;
+    record('force: 4/5 + force:true → still missing, AA not called', ok,
+           `body=${JSON.stringify(ctx.res.body)} aaTouched=${aaTouched}`);
   }
 
   // ── Summary ────────────────────────────────────────────────────────────
