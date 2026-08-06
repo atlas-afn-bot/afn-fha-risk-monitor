@@ -11,6 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard — no root staticwebapp.config.json
+        # The canonical SWA config lives at public/staticwebapp.config.json (Vite copies
+        # public/ into dist/, which is what SWA deploys). A file at the repo root is
+        # silently ignored and causes confusing bugs. See docs/swa-config-location.md.
+        run: |
+          if [ -f "staticwebapp.config.json" ]; then
+            echo "::error file=staticwebapp.config.json::Root-level staticwebapp.config.json is not deployed by Azure SWA. Edit public/staticwebapp.config.json instead. See docs/swa-config-location.md."
+            exit 1
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
