@@ -1,15 +1,4 @@
 {
-  "auth": {
-    "identityProviders": {
-      "azureActiveDirectory": {
-        "registration": {
-          "openIdIssuer": "https://login.microsoftonline.com/18a2c300-b493-4837-a293-015508c28170/v2.0",
-          "clientIdSettingName": "AAD_CLIENT_ID",
-          "clientSecretSettingName": "AAD_CLIENT_SECRET"
-        }
-      }
-    }
-  },
   "routes": [
     {
       "route": "/.auth/login/github",
@@ -34,7 +23,7 @@
       "methods": ["GET"]
     },
     {
-      "_comment": "Read-only files API for RPA (Michael Kunisaki's team). Auth is API-key-only (X-API-Key header), enforced inside the Function. Must be anonymous at the SWA layer so RPA isn't redirected to Entra SSO.",
+      "_comment": "Read-only files API for RPA (Michael Kunisaki's team). Auth is API-key-only (X-API-Key header), enforced inside the Function.",
       "route": "/api/files/*",
       "allowedRoles": ["anonymous", "authenticated"],
       "methods": ["GET", "POST"]
@@ -50,10 +39,7 @@
     },
     {
       "route": "/*",
-      "allowedRoles": [
-        "anonymous",
-        "authenticated"
-      ]
+      "allowedRoles": ["anonymous", "authenticated"]
     }
   ],
   "navigationFallback": {
