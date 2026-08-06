@@ -25,12 +25,12 @@
     },
     {
       "route": "/api/upload-sas",
-      "allowedRoles": ["authenticated"],
+      "allowedRoles": ["anonymous", "authenticated"],
       "methods": ["POST"]
     },
     {
       "route": "/api/list-recent-uploads",
-      "allowedRoles": ["authenticated"],
+      "allowedRoles": ["anonymous", "authenticated"],
       "methods": ["GET"]
     },
     {
@@ -46,21 +46,16 @@
     },
     {
       "route": "/uploads",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": ["anonymous", "authenticated"]
     },
     {
       "route": "/*",
       "allowedRoles": [
+        "anonymous",
         "authenticated"
       ]
     }
   ],
-  "responseOverrides": {
-    "401": {
-      "redirect": "/.auth/login/aad",
-      "statusCode": 302
-    }
-  },
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": [
