@@ -338,7 +338,7 @@ function fullSlots() {
     const bodyKeys = Object.keys(bodyParsed).sort();
     const ok =
       tok === 'AA-TOKEN-XYZ' &&
-      capturedAuth.url === 'https://cr.example.test/v1/authentication' &&
+      capturedAuth.url === 'https://cr.example.test/v2/authentication' &&
       capturedAuth.opts.method === 'POST' &&
       capturedAuth.opts.headers['Content-Type'] === 'application/json' &&
       JSON.stringify(bodyKeys) === JSON.stringify(['apiKey', 'username']) &&
@@ -370,10 +370,10 @@ function fullSlots() {
     const okShape =
       Array.isArray(body.workItems) &&
       body.workItems.length === 1 &&
-      Array.isArray(body.workItems[0].json) &&
-      body.workItems[0].json.length === 1 &&
-      body.workItems[0].json[0].name === 'Date' &&
-      body.workItems[0].json[0].value === '2026-08-01';
+      body.workItems[0].json &&
+      !Array.isArray(body.workItems[0].json) &&
+      typeof body.workItems[0].json === 'object' &&
+      body.workItems[0].json.Date === '2026-08-01';
     const okHeader =
       capturedEnq.opts.headers['X-Authorization'] === 'THE-TOKEN' &&
       capturedEnq.opts.headers['Authorization'] === undefined;

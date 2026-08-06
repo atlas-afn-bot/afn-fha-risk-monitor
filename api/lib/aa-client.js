@@ -64,7 +64,9 @@ async function timedFetch(url, options, timeoutMs) {
  */
 async function authenticate({ crUrl, username, apiKey, timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl }) {
   const impl = fetchImpl || timedFetch;
-  const url = `${trimTrailingSlash(crUrl)}/v1/authentication`;
+  // AA A2019 dev returns 404 on /v1/authentication; the correct path is
+  // /v2/authentication. Verified 2026-08-06 against a2019afn-1dev.
+  const url = `${trimTrailingSlash(crUrl)}/v2/authentication`;
 
   let res;
   try {
@@ -141,12 +143,13 @@ async function enqueueWorkItem({
     });
   }
   const url = `${trimTrailingSlash(crUrl)}/v3/wlm/queues/${encodeURIComponent(queueId)}/workitems`;
+  // AA v3 WLM expects json as an object keyed by column name, NOT the
+  // {name,value} array shape. Verified 2026-08-06 against queue 100015881;
+  // the {name,value} shape returns HTTP 400 "Required column 'X' missing in json".
   const body = {
     workItems: [
       {
-        json: [
-          { name: dateColumn, value: dateValue },
-        ],
+        json: { [dateColumn]: dateValue },
       },
     ],
   };
