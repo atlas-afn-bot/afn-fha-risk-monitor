@@ -30,6 +30,7 @@
  *     existing blob path since SAS has `create+write`).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import {
   Upload as UploadIcon,
   CheckCircle2,
@@ -41,6 +42,26 @@ import {
   ShieldAlert,
   X,
 } from 'lucide-react';
+import { triggerNwCheck } from '@/lib/api';
+
+// Month-name lookup used only for the NW auto-trigger success toast.
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+function monthDisplay(monthFolder: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(monthFolder);
+  if (!m) return monthFolder;
+  const idx = parseInt(m[2], 10) - 1;
+  if (idx < 0 || idx > 11) return monthFolder;
+  return `${MONTH_NAMES[idx]} ${m[1]}`;
+}
+
+// Guard so the NW trigger success toast for a given month fires at most
+// once per browser session. The server-side marker blob still enforces
+// true idempotency; this just prevents duplicate toasts when the same
+// user re-uploads a slot after all 5 were already complete.
+const nwToastShownForMonth = new Set<string>();
 
 const ALLOWED_EMAILS = new Set<string>([
   'jdewindt@afncorp.com',
@@ -167,6 +188,49 @@ function humanSize(bytes: number): string {
   const mb = kb / 1024;
   if (mb < 1024) return `${mb.toFixed(1)} MB`;
   return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+/**
+ * Ask the backend whether we just completed the 5th HUD slot for `month`.
+ * Handles each branch of the NwTriggerCheckResponse union:
+ *   - triggered:true     → success toast (once per month per session)
+ *   - alreadyTriggered   → silent (marker already exists server-side)
+ *   - missing            → silent (still short some slots)
+ *   - disabled           → silent (feature flag off in this env)
+ *   - error (HTTP 500)   → subtle error toast (server already emailed)
+ */
+async function checkNwTrigger(monthFolder: string): Promise<void> {
+  try {
+    const { ok, status, body } = await triggerNwCheck(monthFolder);
+    if (!body) {
+      if (!ok) {
+        toast.error(
+          `Auto-trigger check failed (HTTP ${status}). RPA Support has been notified.`,
+        );
+      }
+      return;
+    }
+    if ('triggered' in body && body.triggered === true) {
+      if (nwToastShownForMonth.has(monthFolder)) return;
+      nwToastShownForMonth.add(monthFolder);
+      toast.success(
+        `✅ ${monthDisplay(monthFolder)} HUD inputs are complete. ` +
+          `Neighborhood Watch is now generating the report — we'll email you when it's live on this dashboard.`,
+      );
+      return;
+    }
+    if ('error' in body) {
+      toast.error(
+        `Neighborhood Watch auto-trigger failed for ${monthDisplay(monthFolder)}. ` +
+          `RPA Support has been notified (ref: ${body.correlationId ?? 'n/a'}).`,
+      );
+      return;
+    }
+    // silent for alreadyTriggered / missing / disabled
+  } catch (_e) {
+    // Network errors on the trigger check are non-fatal for the upload
+    // itself; keep quiet so the user's upload-success UI stays clean.
+  }
 }
 
 function extractEmail(principal: any): string | null {
@@ -520,6 +584,9 @@ export default function FileUploads() {
                 size: file.size,
               },
             }));
+            // Fire-and-forget NW auto-trigger check. Runs off the SAS
+            // upload path so latency stays off the visible upload.
+            void checkNwTrigger(monthFolder);
           } else {
             setSlotStatus((prev) => ({
               ...prev,

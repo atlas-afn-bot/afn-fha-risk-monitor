@@ -40,6 +40,12 @@
       "methods": ["GET", "POST"]
     },
     {
+      "_comment": "Uploader auto-trigger: called by the signed-in user's browser right after each HUD file upload. Enqueues an AA WLM work item when all 5 slots are populated. Requires Entra SSO (unlike /api/files/* which is API-key gated for RPA).",
+      "route": "/api/nw-trigger-check",
+      "allowedRoles": ["authenticated"],
+      "methods": ["POST"]
+    },
+    {
       "route": "/api/files",
       "allowedRoles": ["anonymous", "authenticated"],
       "methods": ["GET"]

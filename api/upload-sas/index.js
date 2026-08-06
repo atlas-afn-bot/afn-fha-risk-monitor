@@ -48,7 +48,7 @@ const ALLOWED_EMAILS = new Set([
   'stallman@afncorp.com',
 ]);
 
-// The six canonical slot slugs. These map 1:1 to the inputs the Python
+// The five canonical slot slugs. These map 1:1 to the inputs the Python
 // snapshot pipeline (`scripts/build-snapshot.py`) consumes. Frontend and
 // backend share the list via duplication — there's no shared TS+JS package
 // in this repo, so we keep the truth in *two* places and bake a unit-style
