@@ -6,6 +6,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [dev]
+  workflow_dispatch:
 
 jobs:
   build_and_deploy:
