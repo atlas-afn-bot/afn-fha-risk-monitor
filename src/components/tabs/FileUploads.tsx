@@ -18,8 +18,10 @@
  *     and skip the upload affordances entirely.
  *
  * Upload model:
- *   - User picks a month (default = current UTC month) at the top of the
- *     page. That month applies to every slot they touch on the page.
+ *   - User picks a month (default = latest available month = prior UTC
+ *     month; the current month is excluded because its FHA snapshot does
+ *     not exist yet). That month applies to every slot they touch on the
+ *     page.
  *   - User drops or picks one file per slot. The slot ↔ category slug
  *     mapping is locked in `SLOT_DEFS` and matches the backend's
  *     `CATEGORY_SLUGS` exactly.
@@ -161,18 +163,30 @@ type AuthState =
   | { kind: 'unauthorized'; email: string }
   | { kind: 'authorized'; email: string };
 
-function currentMonthFolderUtc(): string {
+/**
+ * Latest month the FHA data supports = the calendar month *before* the current
+ * UTC month. FHA snapshots for a month only become available after that month
+ * closes, so the current month is never a valid choice.
+ */
+function latestAvailableMonthFolderUtc(): string {
   const d = new Date();
+  d.setUTCDate(1); // avoid month-end rollover surprises
+  d.setUTCMonth(d.getUTCMonth() - 1);
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   return `${yyyy}-${mm}`;
 }
 
-/** Generate the last N months (including current) as YYYY-MM strings, newest first. */
+/**
+ * Generate the last N months as YYYY-MM strings, newest first, starting from
+ * the latest *available* month (= prior UTC month). The current UTC month is
+ * intentionally excluded because its FHA snapshot does not exist yet.
+ */
 function recentMonths(count: number): string[] {
   const out: string[] = [];
   const d = new Date();
   d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - 1); // start at prior month, not current
   for (let i = 0; i < count; i++) {
     const yyyy = d.getUTCFullYear();
     const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -688,7 +702,7 @@ export default function FileUploads() {
 
   // Month selector — default to current UTC month, allow user to pick last 12.
   const months = useMemo(() => recentMonths(12), []);
-  const [monthFolder, setMonthFolder] = useState<string>(currentMonthFolderUtc());
+  const [monthFolder, setMonthFolder] = useState<string>(latestAvailableMonthFolderUtc());
 
   // Manual-trigger button state.
   const [nwStatusRefreshKey, setNwStatusRefreshKey] = useState(0);
