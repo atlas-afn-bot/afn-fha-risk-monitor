@@ -6,7 +6,7 @@
 # and require CODEOWNER approval.
 
 # Default owner for everything
-*                          @mkunisakiafn
+*                          @mkunisakiafn @ein-afn-bot
 
 # Domain-critical paths
 /src/pages/scenarios/      @mkunisakiafn
