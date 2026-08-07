@@ -336,6 +336,46 @@ def read_compare_ratios_hud_office(path: Path) -> List[dict]:
     return out
 
 
+def read_hud_total_population(path: Path) -> Dict[str, dict]:
+    """Read HUD's Neighborhood Watch total-population xlsx (all loans, not just SDQ).
+
+    HUD delivers this on request as `NW Total Population <M.D.YY>.xlsx`. It has
+    the same schema as `NW Data *.xlsx` (row 8 header, data rows 9+). Each row
+    is one FHA-insured loan HUD attributes to AFN.
+
+    Returns a dict keyed by FHA Case Number, with:
+      hud_channel        : 'Retail' if Originating ID populated, else 'Wholesale'
+      hud_orig_id        : HUD Originating ID (10-digit FHA branch ID) or ''
+      hud_sponsor_id     : HUD Sponsor ID or ''
+      hud_fha_ins_stat   : 'A' (active) / 'C' (claim) / etc.
+
+    Used to filter the Encompass loan set to HUD's authoritative population
+    so the snapshot's total loan count matches HUD Compare Ratios exactly.
+    """
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    # HUD NW files: header row is row 8 (0-indexed), data starts row 9.
+    out: Dict[str, dict] = {}
+    for r in rows[9:]:
+        if not r or r[7] is None:
+            continue
+        case = str(r[7]).strip()
+        if not case:
+            continue
+        orig = str(r[0] or "").strip()
+        spr = str(r[1] or "").strip()
+        out[case] = {
+            "hud_channel": "Retail" if orig else ("Wholesale" if spr else None),
+            "hud_orig_id": orig,
+            "hud_sponsor_id": spr,
+            "hud_fha_ins_stat": str(r[8] or "").strip() if len(r) > 8 else "",
+        }
+    return out
+
+
 def read_compare_ratios_branch(path: Path) -> List[dict]:
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     ws = wb[wb.sheetnames[0]]
@@ -1729,10 +1769,59 @@ def main() -> int:
     branch_rows = read_compare_ratios_branch(branches_path)
     print(f"  {len(branch_rows)} branch rows")
 
+    # ── HUD total population (optional) ──
+    # HUD delivers `NW Total Population <M.D.YY>.xlsx` on request with per-loan
+    # detail for AFN's entire endorsed book (not just SDQ). When present, we
+    # use it to filter the Encompass loan set to only HUD-endorsed loans so
+    # our totals match HUD Compare Ratios exactly. When absent, we fall back
+    # to the raw Encompass set (older behavior).
+    hud_pop_path: Optional[Path] = None
+    try:
+        hud_pop_path = _find_source(period, "NW Total Population*.xlsx")
+    except FileNotFoundError:
+        pass
+    hud_pop_by_case: Dict[str, dict] = {}
+    if hud_pop_path is not None:
+        print(f"  HUD Pop: {hud_pop_path.name}")
+        hud_pop_by_case = read_hud_total_population(hud_pop_path)
+        print(f"  HUD total population: {len(hud_pop_by_case):,} endorsed loans")
+
     # ── Loans (Encompass + NW2) ──
     print("Reading loan-level data…")
     loans = build_loans(enc_path, nw2_path, hud_office_lookup)
-    print(f"  {len(loans):,} loans")
+    print(f"  {len(loans):,} loans from Encompass")
+
+    # ── HUD endorsement filter ──
+    # If we have HUD's total-population file, drop any Encompass loan whose
+    # FHA case number isn't in HUD's endorsed set. Also annotate each surviving
+    # loan with HUD's channel classification (hud_channel) and endorsement flag
+    # (hud_endorsed=True) so downstream reporting can compare / drift-check.
+    if hud_pop_by_case:
+        before = len(loans)
+        kept = []
+        dropped_no_case = 0
+        dropped_not_endorsed = 0
+        for l in loans:
+            case = l.get("fha_case_number")
+            if not case:
+                dropped_no_case += 1
+                continue
+            hud = hud_pop_by_case.get(case)
+            if hud is None:
+                dropped_not_endorsed += 1
+                continue
+            l["hud_endorsed"] = True
+            l["hud_channel"] = hud["hud_channel"]
+            l["hud_orig_id"] = hud["hud_orig_id"]
+            l["hud_sponsor_id"] = hud["hud_sponsor_id"]
+            l["hud_fha_ins_stat"] = hud["hud_fha_ins_stat"]
+            kept.append(l)
+        loans = kept
+        missing_in_enc = len(hud_pop_by_case) - len(loans)
+        print(f"  HUD endorsement filter: {before:,} → {len(loans):,} loans "
+              f"(dropped {dropped_not_endorsed:,} not-in-HUD, "
+              f"{dropped_no_case:,} no-case-number; HUD has {missing_in_enc:,} "
+              f"loans not present in Encompass)")
 
     # ── Derived aggregates ──
     print("Computing portfolio_slices…")
