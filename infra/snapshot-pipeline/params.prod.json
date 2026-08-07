@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "westus2" },
+    "storageAccountName": { "value": "stafnfhauploads" },
+    "uploadsContainerName": { "value": "uploads" },
+    "snapshotsContainerName": { "value": "snapshots" },
+    "logWorkspaceName": { "value": "log-fha-snapshot-pipeline" },
+    "appInsightsName": { "value": "ai-fha-snapshot-pipeline" },
+    "acrName": { "value": "crafnfhasnapshotpipeline" },
+    "containerEnvName": { "value": "cae-fha-snapshot-pipeline" },
+    "containerAppName": { "value": "fha-snapshot-builder" }
+  }
+}

@@ -40,8 +40,14 @@ import pandas as pd
 SCHEMA_VERSION = 1
 SCRIPT_VERSION = "1.0"
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SOURCE_ROOT = REPO_ROOT / "data" / "source"
-SNAPSHOT_DIR = REPO_ROOT / "public" / "data" / "snapshots"
+# Environment overrides so the automated snapshot pipeline (container)
+# can point the script at a working tree it built at runtime, without
+# having to duplicate the whole repo under /opt/repo. The default
+# behavior (local dev, run from a repo checkout) is unchanged.
+_env_source = os.environ.get("SNAPSHOT_SOURCE_ROOT")
+_env_out = os.environ.get("SNAPSHOT_OUTPUT_DIR")
+SOURCE_ROOT = Path(_env_source) if _env_source else REPO_ROOT / "data" / "source"
+SNAPSHOT_DIR = Path(_env_out) if _env_out else REPO_ROOT / "public" / "data" / "snapshots"
 
 # Canonical HUD Office → HOC map (from db/migrations/001_initial_schema.sql)
 HUD_OFFICE_HOC: Dict[str, str] = {
