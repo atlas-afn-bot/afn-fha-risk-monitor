@@ -1,0 +1,12 @@
+# Runtime dependencies for the FHA snapshot pipeline container.
+# Pinned to compatible ranges — refresh with `pip-compile` if we adopt one.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+azure-identity>=1.19,<2.0
+azure-storage-blob>=12.24,<13.0
+opencensus-ext-azure>=1.1.14,<2.0
+
+# build-snapshot.py deps — must match projects/afn-fha-risk-monitor/scripts/requirements.txt
+openpyxl>=3.1,<4.0
+pandas>=2.2,<3.0
