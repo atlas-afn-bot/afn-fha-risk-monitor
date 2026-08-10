@@ -1,0 +1,57 @@
+<p>Hi Michael, Matt, and Cesar,</p>
+
+<p>The FHA Risk Monitor dev/prod split + standing-PR promotion pipeline is live. Here's what changed and what you'll notice.</p>
+
+<h3>URLs</h3>
+<ul>
+  <li><strong>Prod (unchanged):</strong> <a href="https://fha-monitor.afnai.com/">https://fha-monitor.afnai.com/</a> — same host, same DNS, same AAD. Committee-visible.</li>
+  <li><strong>New dev:</strong> <a href="https://fha-monitor-dev.afnai.com/">https://fha-monitor-dev.afnai.com/</a> — separate SWA, separate Azure app registration (same tenant), yellow <strong>DEV ENVIRONMENT</strong> banner in the UI. <em>Not for committee use.</em></li>
+</ul>
+
+<h3>Promotion flow</h3>
+<pre style="background:#f5f5f5;padding:8px;border-left:3px solid #888;">
+feature/xxx  ──PR──▶  dev  ──Standing PR──▶  main  ──deploy──▶  prod
+</pre>
+
+<ol>
+  <li><strong>Feature work</strong> lands on <code>dev</code> via a normal PR (CI + 1 review, deploys automatically to dev SWA).</li>
+  <li>Soak on <code>dev</code>. Michael's discretion — no timer.</li>
+  <li>A <strong>standing <code>dev → main</code> PR</strong> is auto-opened by <code>.github/workflows/promotion-pr.yml</code>, auto-updates on every dev merge, and auto-reopens after each promotion. Bookmark it: <a href="https://github.com/afncorp/afn-fha-risk-monitor/pulls?q=is%3Aopen+base%3Amain+head%3Adev">github.com/afncorp/afn-fha-risk-monitor/pulls (dev → main)</a>.</li>
+  <li>When <strong>any one of the three of you</strong> — Michael Kunisaki (<code>mkunisakiafn</code>), Matt Gruber (<code>mgruberafn</code>), Cesar Arce (<code>carce-afn</code>) — approves+merges the standing PR, <code>deploy-prod.yml</code> fires and ships to prod.</li>
+</ol>
+
+<p>Approving/merging the standing PR = approving the prod deploy. There's no separate deploy-approval step (GitHub's environment-reviewer feature isn't available on the Team plan for private repos; we get functionally-equivalent gating via branch protection + admin-bypass-disabled on <code>main</code>).</p>
+
+<h3>What Julian's setup looks like</h3>
+<p>Julian doesn't have a GitHub account (policy-locked since May 14, 2026 handoff — ATLAS is her author of record). She continues to drive changes through her Ally session with ATLAS; ATLAS opens PRs on her behalf. She is <strong>not</strong> in the approver rotation on GitHub — the three of you cover that.</p>
+
+<h3>Hotfix path</h3>
+<p>Emergency changes: branch from <code>main</code>, PR into <code>main</code> directly (bypasses <code>dev</code>). Same protections apply — still needs one approver to merge. After merge, follow up with a <code>main → dev</code> backport PR so <code>dev</code> stays consistent.</p>
+
+<h3>Rollback</h3>
+<p>Every prod deploy is a single squash commit on <code>main</code>. Rollback = <code>git revert &lt;sha&gt;</code> on <code>main</code> → opens a PR → same approval flow → merge → prod redeploys the prior state. Roughly 5–10 min end-to-end.</p>
+
+<h3>Action items for Matt (repo admin — only Matt has admin on the repo right now)</h3>
+<ol>
+  <li><strong>Change default branch</strong> from <code>main</code> to <code>dev</code> (repo settings → default branch).</li>
+  <li><strong>Add <code>mkunisakiafn</code> as write collaborator</strong> (Michael isn't yet — he's an org member without repo access; a write invite will let him merge PRs). Michael, you'll get a GitHub invite email; please accept it.</li>
+  <li><strong>Add <code>carce-afn</code> as write collaborator</strong> — same story, same invite email. Cesar, please accept when it hits you.</li>
+  <li>Optional but recommended: <strong>enable "Automatically delete head branches"</strong> in repo settings so merged feature branches don't pile up.</li>
+</ol>
+
+<h3>One open item to verify before we promote anything</h3>
+<p>On prod, <code>GET /api/files?month=YYYY-MM</code> works fine with the <code>X-API-Key</code> header (returns JSON). But <code>GET /api/files/{month}/{slot}/latest</code> (the sub-path RPA uses to fetch individual files) currently returns <strong>302 → AAD login</strong> even with a valid key — the wildcard SWA route rule isn't matching sub-paths. Either RPA is hitting a different URL (direct Function App), it's silently broken already, or the SWA route-rule semantics don't match our assumption.</p>
+<p><strong>Michael</strong>, could you check with the RPA team on which URL(s) they actually call and whether they've seen any auth issues recently? Once we understand what RPA does, we can decide whether the promotion PR needs a config tweak first. Details in <strong>Jira BPR-442</strong> and <code>memory/2026-08-06-fha-risk-monitor-aadsts50196-rca.md</code>.</p>
+
+<h3>Where things live</h3>
+<ul>
+  <li><strong>Standing promotion PR:</strong> <a href="https://github.com/afncorp/afn-fha-risk-monitor/pull/49">github.com/afncorp/afn-fha-risk-monitor/pull/49</a></li>
+  <li><strong>Jira ticket:</strong> <a href="https://afncorp.atlassian.net/browse/BPR-442">BPR-442</a> (In Progress, assigned to Michael)</li>
+  <li><strong>Architecture docs:</strong> <code>memory/afn-fha-risk-monitor.md</code> §Dev/Prod Split</li>
+  <li><strong>SSO fix RCA (last night's 5-hour marathon):</strong> <code>memory/2026-08-06-fha-risk-monitor-aadsts50196-rca.md</code></li>
+</ul>
+
+<p>Please shout with anything unclear or that doesn't match what you were expecting.</p>
+
+<p>— ATLAS / PROMETHEUS<br/>
+<em>on behalf of Michael Kunisaki</em></p>
