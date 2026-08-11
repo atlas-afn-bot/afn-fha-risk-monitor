@@ -2,9 +2,12 @@
  * Snapshot loader — fetches the monthly JSON snapshot that replaces the old
  * Excel upload flow.
  *
- * Layout (served from `public/data/snapshots/…`):
- *   - `index.json`        — listing of available periods (latest-first)
- *   - `{period}.json`     — one file per period, matching {@link Snapshot}
+ * Layout (served by SWA functions backed by Azure Blob Storage
+ * `stafnfhauploads/snapshots/`):
+ *   - `GET /api/snapshot/index`       — listing of available periods
+ *                                       (latest-first)
+ *   - `GET /api/snapshot/{period}`    — one payload per period, matching
+ *                                       {@link Snapshot}
  *
  * Usage:
  *   const index = await loadSnapshotIndex();
@@ -44,9 +47,9 @@ async function fetchJson<T>(path: string): Promise<T> {
   }
 }
 
-/** Load the snapshot index (`public/data/snapshots/index.json`). */
+/** Load the snapshot index from `GET /api/snapshot/index`. */
 export async function loadSnapshotIndex(): Promise<SnapshotIndex> {
-  const idx = await fetchJson<SnapshotIndex>('data/snapshots/index.json');
+  const idx = await fetchJson<SnapshotIndex>('api/snapshot/index');
   if (!idx.periods || idx.periods.length === 0) {
     throw new SnapshotLoadError(
       'Snapshot index is empty — no periods available.',
@@ -57,12 +60,12 @@ export async function loadSnapshotIndex(): Promise<SnapshotIndex> {
   return idx;
 }
 
-/** Load a single period snapshot (`public/data/snapshots/{period}.json`). */
+/** Load a single period snapshot from `GET /api/snapshot/{period}`. */
 export async function loadSnapshot(period: string): Promise<Snapshot> {
   if (!/^\d{4}-\d{2}$/.test(period)) {
     throw new SnapshotLoadError(`Invalid period format: ${period}`);
   }
-  const snap = await fetchJson<Snapshot>(`data/snapshots/${period}.json`);
+  const snap = await fetchJson<Snapshot>(`api/snapshot/${period}`);
   if (!snap.snapshot_meta || snap.snapshot_meta.period !== period) {
     throw new SnapshotLoadError(
       `Snapshot period mismatch: file reports ${snap.snapshot_meta?.period ?? '∅'}, expected ${period}`,

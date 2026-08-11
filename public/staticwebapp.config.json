@@ -51,6 +51,12 @@
       "methods": ["GET"]
     },
     {
+      "_comment": "Snapshot API (/api/snapshot/index + /api/snapshot/{YYYY-MM}). Backed by the container-produced blobs in stafnfhauploads/snapshots/. User-facing dashboard data — Entra SSO only, no API key (matches ai-analysis, not files-list).",
+      "route": "/api/snapshot/*",
+      "allowedRoles": ["authenticated"],
+      "methods": ["GET"]
+    },
+    {
       "route": "/uploads",
       "allowedRoles": ["authenticated"]
     },
