@@ -1787,27 +1787,12 @@ def _normalize_ai_insight(item: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
-def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Generate 4 AI insights via the AFN LiteLLM proxy.
+def _build_ai_prompt(snapshot: Dict[str, Any]) -> tuple[str, str]:
+    """Assemble the (system_prompt, user_prompt) pair used for AI insights.
 
-    Reads ``AFN_LITELLM_API_KEY`` from the environment and posts to the
-    internal proxy. Falls back to a single placeholder insight on any
-    failure so the snapshot build never breaks.
+    Extracted so the Azure OpenAI and LiteLLM code paths share identical
+    prompt semantics — the model/provider is the only thing that varies.
     """
-    api_key = os.environ.get("AFN_LITELLM_API_KEY")
-    if not api_key:
-        print("  WARN: AFN_LITELLM_API_KEY not set — skipping AI insights")
-        return list(_FALLBACK_AI_INSIGHTS)
-
-    try:
-        from openai import OpenAI  # type: ignore
-    except ImportError:
-        print("  WARN: openai package not installed — skipping AI insights")
-        return list(_FALLBACK_AI_INSIGHTS)
-
-    base_url = os.environ.get("AFN_LITELLM_BASE_URL", "http://100.120.169.17:4000/v1")
-    model = os.environ.get("AFN_LITELLM_INSIGHT_MODEL", "gpt-4o")
-
     facts = _build_ai_facts(snapshot)
     has_projections = bool(snapshot.get("projections"))
     projection_guidance = (
@@ -1853,25 +1838,15 @@ def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
         "'green' = positive / improving trend."
     )
     user_prompt = json.dumps(facts, indent=2, default=str)
+    return system_prompt, user_prompt
 
-    try:
-        client = OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
-        print(f"  Calling LiteLLM proxy ({base_url}, model={model})…")
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-            max_tokens=1200,
-        )
-        raw = resp.choices[0].message.content or ""
-    except Exception as e:
-        print(f"  WARN: AI insight call failed ({e!r}) — falling back")
-        return list(_FALLBACK_AI_INSIGHTS)
 
+def _parse_ai_response(raw: str) -> List[Dict[str, Any]]:
+    """Parse and validate an LLM JSON response into normalized insights.
+
+    Returns a copy of ``_FALLBACK_AI_INSIGHTS`` on any parse/validation
+    failure so callers never see an empty result.
+    """
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -1900,6 +1875,145 @@ def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
     if len(insights) < 4:
         print(f"  NOTE: LLM returned {len(insights)} insights (expected 4)")
     return insights
+
+
+def _build_ai_insights_azure(
+    snapshot: Dict[str, Any],
+    *,
+    endpoint: str,
+    deployment: str,
+    api_key: str,
+    api_version: str,
+) -> List[Dict[str, Any]]:
+    """Call Azure OpenAI (chat.completions) for AI insights.
+
+    Uses the ``AzureOpenAI`` client from the ``openai`` package. On any
+    error, returns the canned fallback so snapshot build never breaks.
+    """
+    try:
+        from openai import AzureOpenAI  # type: ignore
+    except ImportError:
+        print("  WARN: openai package not installed / AzureOpenAI unavailable — skipping AI insights")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    system_prompt, user_prompt = _build_ai_prompt(snapshot)
+
+    try:
+        client = AzureOpenAI(
+            api_version=api_version,
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            timeout=60.0,
+        )
+        print(f"  Calling Azure OpenAI ({endpoint}, deployment={deployment})…")
+        resp = client.chat.completions.create(
+            model=deployment,  # NB: Azure uses the deployment name here
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            max_tokens=1200,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"  WARN: AI insight call failed ({e!r}) — falling back")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    return _parse_ai_response(raw)
+
+
+def _build_ai_insights_litellm(
+    snapshot: Dict[str, Any],
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+) -> List[Dict[str, Any]]:
+    """Call the legacy AFN LiteLLM proxy for AI insights.
+
+    Kept as a backward-compatible fallback for local dev environments that
+    have LiteLLM configured but not Azure OpenAI. In prod (Azure Container
+    Apps) this path is unreachable because the tailnet IP is not routable.
+    """
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        print("  WARN: openai package not installed — skipping AI insights")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    system_prompt, user_prompt = _build_ai_prompt(snapshot)
+
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
+        print(f"  Calling LiteLLM proxy ({base_url}, model={model})…")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            max_tokens=1200,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"  WARN: AI insight call failed ({e!r}) — falling back")
+        return list(_FALLBACK_AI_INSIGHTS)
+
+    return _parse_ai_response(raw)
+
+
+def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Generate 4 AI insights, preferring Azure OpenAI over LiteLLM.
+
+    Provider selection (in order):
+
+    1. **Azure OpenAI (primary)** — used when all four of
+       ``AZURE_OPENAI_ENDPOINT``, ``AZURE_OPENAI_DEPLOYMENT``,
+       ``AZURE_OPENAI_API_KEY`` are set. ``AZURE_OPENAI_API_VERSION``
+       defaults to ``2025-01-01-preview`` when unset. This is the path
+       used by the production Container App (public HTTPS, no tailnet).
+
+    2. **LiteLLM proxy (fallback)** — used when the Azure vars aren't
+       all set but ``AFN_LITELLM_API_KEY`` is. Preserves the original
+       behaviour for local dev environments that still route through the
+       AFN LiteLLM proxy on Matt's tailnet.
+
+    3. **No config** — returns the canned ``_FALLBACK_AI_INSIGHTS`` so
+       the snapshot build never breaks.
+    """
+    az_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    az_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+    az_api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    az_api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+
+    if az_endpoint and az_deployment and az_api_key:
+        return _build_ai_insights_azure(
+            snapshot,
+            endpoint=az_endpoint,
+            deployment=az_deployment,
+            api_key=az_api_key,
+            api_version=az_api_version,
+        )
+
+    litellm_key = os.environ.get("AFN_LITELLM_API_KEY")
+    if litellm_key:
+        base_url = os.environ.get(
+            "AFN_LITELLM_BASE_URL", "http://100.120.169.17:4000/v1"
+        )
+        model = os.environ.get("AFN_LITELLM_INSIGHT_MODEL", "gpt-4o")
+        return _build_ai_insights_litellm(
+            snapshot, base_url=base_url, api_key=litellm_key, model=model
+        )
+
+    print(
+        "  WARN: no AI provider configured "
+        "(set AZURE_OPENAI_* or AFN_LITELLM_API_KEY) — skipping AI insights"
+    )
+    return list(_FALLBACK_AI_INSIGHTS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

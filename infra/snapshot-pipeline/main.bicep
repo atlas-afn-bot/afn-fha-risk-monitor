@@ -47,6 +47,19 @@ param image string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:lates
 @secure()
 param triggerSharedSecret string
 
+@description('Azure OpenAI endpoint for AI insight generation (e.g. https://brady-wu-ai.cognitiveservices.azure.com/).')
+param azureOpenAIEndpoint string
+
+@description('Azure OpenAI deployment name (NOT the underlying model name) used for AI insights.')
+param azureOpenAIDeployment string
+
+@description('Azure OpenAI REST API version, e.g. 2025-01-01-preview.')
+param azureOpenAIApiVersion string = '2025-01-01-preview'
+
+@description('Azure OpenAI API key (secret). Supply via `--parameters azureOpenAIApiKey=<value>` or Key Vault reference.')
+@secure()
+param azureOpenAIApiKey string
+
 // ── Step 1: Log Analytics + App Insights ────────────────────────────────
 module logAnalytics 'modules/log-analytics.bicep' = {
   name: 'logAnalyticsDeploy'
@@ -100,6 +113,10 @@ module containerApp 'modules/container-app.bicep' = {
     uploadsContainerName: uploadsContainerName
     snapshotsContainerName: snapshotsContainerName
     triggerSharedSecret: triggerSharedSecret
+    azureOpenAIEndpoint: azureOpenAIEndpoint
+    azureOpenAIDeployment: azureOpenAIDeployment
+    azureOpenAIApiVersion: azureOpenAIApiVersion
+    azureOpenAIApiKey: azureOpenAIApiKey
   }
   dependsOn: [
     storageContainer

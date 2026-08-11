@@ -51,6 +51,19 @@ param snapshotsContainerName string = 'snapshots'
 @secure()
 param triggerSharedSecret string
 
+@description('Azure OpenAI endpoint for AI insight generation (public HTTPS).')
+param azureOpenAIEndpoint string
+
+@description('Azure OpenAI deployment name used for AI insights (NOT the underlying model name).')
+param azureOpenAIDeployment string
+
+@description('Azure OpenAI REST API version, e.g. 2025-01-01-preview.')
+param azureOpenAIApiVersion string = '2025-01-01-preview'
+
+@description('Azure OpenAI API key (stored as a Container App secret).')
+@secure()
+param azureOpenAIApiKey string
+
 resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
   location: location
@@ -110,6 +123,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'trigger-shared-secret'
           value: triggerSharedSecret
         }
+        {
+          name: 'azure-openai-api-key'
+          value: azureOpenAIApiKey
+        }
       ]
     }
     template: {
@@ -145,6 +162,22 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'PYTHONUNBUFFERED'
               value: '1'
+            }
+            {
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: azureOpenAIEndpoint
+            }
+            {
+              name: 'AZURE_OPENAI_DEPLOYMENT'
+              value: azureOpenAIDeployment
+            }
+            {
+              name: 'AZURE_OPENAI_API_VERSION'
+              value: azureOpenAIApiVersion
+            }
+            {
+              name: 'AZURE_OPENAI_API_KEY'
+              secretRef: 'azure-openai-api-key'
             }
           ]
         }

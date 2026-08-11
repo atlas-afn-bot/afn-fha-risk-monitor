@@ -10,6 +10,9 @@
     "appInsightsName": { "value": "ai-fha-snapshot-pipeline" },
     "acrName": { "value": "crafnfhasnapshotpipeline" },
     "containerEnvName": { "value": "cae-fha-snapshot-pipeline" },
-    "containerAppName": { "value": "fha-snapshot-builder" }
+    "containerAppName": { "value": "fha-snapshot-builder" },
+    "azureOpenAIEndpoint": { "value": "https://brady-wu-ai.cognitiveservices.azure.com/" },
+    "azureOpenAIDeployment": { "value": "gpt-4-brady" },
+    "azureOpenAIApiVersion": { "value": "2025-01-01-preview" }
   }
 }
