@@ -429,6 +429,46 @@ export interface AIInsight {
   confidence?: 'low' | 'medium' | 'high' | null;
 }
 
+/**
+ * One Portfolio Risk Factor bullet baked into the snapshot at pipeline build
+ * time (see `scripts/build-snapshot.py :: build_risk_factor_bullets()`).
+ * Rendered by the Executive Summary card. Produced from the same LLM prompt
+ * as the on-demand `/api/ai-analysis` regenerate endpoint (PR B), so the
+ * shape here is intentionally identical to `AIBullet` in
+ * `src/lib/aiAnalysis.ts`.
+ */
+export interface RiskFactorBullet {
+  /** Free-form 1–2 sentence bullet body. */
+  text: string;
+  /** Visual severity — maps to the red/yellow/green/neutral treatments. */
+  severity: 'red' | 'yellow' | 'green' | 'neutral';
+}
+
+/**
+ * Container for the Portfolio Risk Factor bullets baked into each snapshot,
+ * with provenance for the future on-demand regenerate write-back path
+ * (PR B introduces `/api/ai-analysis` regenerate that mutates the
+ * `regenerated_*` fields; PR A leaves them `null`).
+ *
+ * Optional on `Snapshot` — historical snapshots produced before this
+ * feature landed (Feb–May 2026) don't carry the field; the frontend must
+ * feature-detect and fall back to the existing on-demand fetch path.
+ */
+export interface RiskFactorBullets {
+  /** 6±2 bullets summarizing risk-factor trends for the period. */
+  bullets: RiskFactorBullet[];
+  /** ISO timestamp of the original bake. */
+  generated_at: string;
+  /** The script / RPA that produced the initial bake (e.g. `scripts/build-snapshot.py v1.0`). */
+  generated_by: string;
+  /** ISO timestamp of the most recent on-demand regenerate. `null` if never regenerated. */
+  regenerated_at: string | null;
+  /** Identity of the caller who last regenerated (e.g. Entra `oid`). `null` if never regenerated. */
+  regenerated_by: string | null;
+  /** Schema version for forward-compat. */
+  schema_version: number;
+}
+
 /** Per-sponsored-originator (TPO) rollup from NW Data 2 sponsor columns. */
 export interface SponsorTPODetailRow {
   sponsor_originator_name: string;
@@ -466,6 +506,13 @@ export interface Snapshot {
    * shipped (or builds where the LLM proxy was unreachable) may omit it.
    */
   ai_insights?: AIInsight[];
+  /**
+   * Portfolio Risk Factor bullets baked at pipeline build time (PR A of 2).
+   * Optional for forward-compat: snapshots produced before this feature
+   * shipped (Feb–May 2026) omit it — the frontend falls back to the legacy
+   * on-demand `/api/ai-analysis` fetch path when absent.
+   */
+  risk_factor_bullets?: RiskFactorBullets;
   /**
    * Forward-looking Compare Ratio projections at 1/3/6-month horizons
    * under best/base/worst scenarios. Computed loan-level and aggregated up.
