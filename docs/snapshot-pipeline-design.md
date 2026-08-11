@@ -356,3 +356,24 @@ PR B (the paired follow-up PR, not yet open) covers:
 4. Frontend button on the Executive Summary card that hits the regenerate endpoint; shows a spinner while the write is in flight.
 
 Until PR B lands, the frontend continues to work exactly as it does today — it just ignores the new field. That's why PR A is safe to merge on its own.
+
+---
+
+## Retired slot: `hud-national-totals` (do not re-introduce)
+
+**Status:** Retired 2026-08-11. Do NOT add this slot back to `SLOT_ALIAS_TABLE`, `CATEGORY_SLUGS`, the `upload-sas` allowlist, or the `FileUploads.tsx` slot cards.
+
+### Why it was retired
+
+`hud-national-totals` was an early name for what is now `hud-total-compare-ratios`. During the 2026-05 upload cycle the RPA wrote the same source file into both prefixes (`2026-05/hud-national-totals/HUD_Total_Compare_Ratio_5.31.26.xls` and `2026-05/hud-total-compare-ratios/HUD_Total_Compare_Ratio_5.31.26.xls`, byte-identical, MD5 `NgEjvgDexNVqUam5GHCKjA==`). Starting 2026-06 the RPA writes only to `hud-total-compare-ratios/` (June's blob is literally named `HUD_National_Totals_6.30.26.xlsx` but lives inside the `hud-total-compare-ratios/` prefix — same file, correct slot).
+
+The snapshot pipeline never referenced `hud-national-totals` (grep `scripts/build-snapshot.py` for `hud_national_totals` → zero hits). The upload UI never surfaced it either. The stale `2026-05/hud-national-totals/` prefix was blob-only lint.
+
+### Cleanup done
+
+- Deleted `2026-05/hud-national-totals/HUD_Total_Compare_Ratio_5.31.26.xls` (byte-identical copy preserved in `2026-05/hud-total-compare-ratios/`). Verified same MD5 before delete.
+- No code change was needed; the slot was already absent from every code path.
+
+### If you see it again
+
+If a future upload lands in `<month>/hud-national-totals/`, the RPA regressed. Fix at the RPA side (route to `hud-total-compare-ratios/`), then delete the misplaced blob. Do not re-add the slot alias to "handle" it in code.
