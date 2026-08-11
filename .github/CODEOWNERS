@@ -1,20 +1,23 @@
 # CODEOWNERS — afn-fha-risk-monitor
 #
-# Michael Kunisaki is the standing owner of this project.
-# Julian Domingo drives changes but works through ATLAS (no direct GitHub identity).
+# Michael Kunisaki is the standing owner of this project. Michael's GitHub
+# identity is @ein-afn-bot (his Ein agent account); reviews from ein-afn-bot
+# ARE Michael's reviews. Julian Domingo drives changes but works through
+# ATLAS (no direct GitHub identity).
+#
 # All PRs targeting `main` must originate from `dev` (see branch protections)
 # and require CODEOWNER approval.
 
 # Default owner for everything
-*                          @mkunisakiafn @ein-afn-bot
+*                          @ein-afn-bot
 
 # Domain-critical paths
-/src/pages/scenarios/      @mkunisakiafn
-/src/lib/computeData.ts    @mkunisakiafn
-/src/lib/exportPDF.ts      @mkunisakiafn
+/src/pages/scenarios/      @ein-afn-bot
+/src/lib/computeData.ts    @ein-afn-bot
+/src/lib/exportPDF.ts      @ein-afn-bot
 
 # Infrastructure & config — extra care
-/.github/workflows/        @mkunisakiafn
-/staticwebapp.config.json  @mkunisakiafn
-/infra/                    @mkunisakiafn
-/.github/CODEOWNERS        @mkunisakiafn
+/.github/workflows/        @ein-afn-bot
+/staticwebapp.config.json  @ein-afn-bot
+/infra/                    @ein-afn-bot
+/.github/CODEOWNERS        @ein-afn-bot
