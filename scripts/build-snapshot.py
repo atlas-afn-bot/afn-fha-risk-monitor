@@ -1966,6 +1966,602 @@ def _build_ai_insights_litellm(
     return _parse_ai_response(raw)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Portfolio Risk Factor bullets — baked at build time (PR A of 2)
+#
+# The FHA dashboard's Executive Summary card renders 6 AI-generated bullets
+# summarizing risk-factor trends. Historically the frontend called
+# /api/ai-analysis on every period load. Baking the bullets into the
+# snapshot removes that per-load LLM cost and gives every reviewer the same
+# committee-grade summary.
+#
+# The prompt is loaded from data/prompts/risk-factor-analysis.system.md so
+# the future /api/ai-analysis "regenerate" endpoint (PR B) can reuse the same
+# file byte-for-byte. Do NOT inline-tune the prompt here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+RISK_FACTOR_PROMPT_PATH = REPO_ROOT / "data" / "prompts" / "risk-factor-analysis.system.md"
+RISK_FACTOR_BULLETS_SCHEMA_VERSION = 1
+_VALID_RISK_SEVERITIES = {"red", "yellow", "green", "neutral"}
+
+
+def _load_risk_factor_prompt() -> Optional[str]:
+    """Load the shared risk-factor system prompt.
+
+    Returns the prompt body with any leading HTML comment (used for
+    developer notes at the top of the file) stripped, or ``None`` if the
+    file is missing or unreadable. Callers treat ``None`` as a fatal-for-
+    this-feature signal and return an empty bullet list.
+    """
+    try:
+        raw = RISK_FACTOR_PROMPT_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(
+            "  WARN: risk-factor prompt missing at "
+            f"{RISK_FACTOR_PROMPT_PATH} — skipping risk_factor_bullets"
+        )
+        return None
+    except OSError as e:  # pragma: no cover — filesystem edge
+        print(f"  WARN: could not read {RISK_FACTOR_PROMPT_PATH} ({e!r}) — skipping risk_factor_bullets")
+        return None
+    # Strip a single leading HTML comment (developer notes) if present.
+    import re as _re
+    stripped = _re.sub(r"^<!--.*?-->\s*", "", raw, count=1, flags=_re.DOTALL)
+    return stripped
+
+
+def _rf_group_by(
+    loans: List[dict],
+    getter,
+    *,
+    min_count: int = 20,
+) -> List[Dict[str, Any]]:
+    """Port of ``groupByField`` from ``src/lib/aiAnalysis.ts``.
+
+    Groups loans by a string label, drops buckets below ``min_count`` (the TS
+    dashboard behavior), and returns rows sorted by DQ rate descending.
+    """
+    groups: Dict[str, Dict[str, int]] = {}
+    for l in loans:
+        raw = getter(l)
+        key = str(raw) if raw not in (None, "", 0) or raw == 0 else "Unknown"
+        # Normalize "" / None to "Unknown" to match TS: `key = getter(l) || 'Unknown'`.
+        if not key or key == "None":
+            key = "Unknown"
+        g = groups.setdefault(key, {"total": 0, "dlq": 0})
+        g["total"] += 1
+        if l.get("is_delinquent"):
+            g["dlq"] += 1
+    rows = [
+        {
+            "label": label,
+            "total": v["total"],
+            "dlq": v["dlq"],
+            "dqRate": (v["dlq"] / v["total"] * 100.0) if v["total"] > 0 else 0.0,
+        }
+        for label, v in groups.items()
+        if v["total"] >= min_count
+    ]
+    rows.sort(key=lambda r: -r["dqRate"])
+    return rows
+
+
+def _rf_risk_indicator_label(cnt: Optional[int]) -> str:
+    """Match TS: ``cnt >= 5 ? '5+' : String(cnt)``."""
+    n = cnt if isinstance(cnt, int) else 0
+    return "5+" if n >= 5 else str(n)
+
+
+def _rf_channel_summary(loans: List[dict], channel: str) -> Dict[str, Any]:
+    ch = [l for l in loans if l.get("channel") == channel]
+    total = len(ch)
+    dpa = [l for l in ch if l.get("has_dpa")]
+    dpa_dq = sum(1 for l in dpa if l.get("is_delinquent"))
+    dlq = sum(1 for l in ch if l.get("is_delinquent"))
+    return {
+        "totalLoans": total,
+        "dpaConc": (len(dpa) / total * 100.0) if total > 0 else 0.0,
+        "overallDQRate": (dlq / total * 100.0) if total > 0 else 0.0,
+        "dpaDQRate": (dpa_dq / len(dpa) * 100.0) if dpa else 0.0,
+    }
+
+
+def _rf_fico_buckets(loans: List[dict]) -> List[Dict[str, Any]]:
+    """Port of ``computeFICO`` from ``src/lib/computeData.ts``."""
+    buckets = [
+        ("<580", 0, 579),
+        ("580-619", 580, 619),
+        ("620-659", 620, 659),
+        ("660-679", 660, 679),
+        ("680-699", 680, 699),
+        ("700-739", 700, 739),
+        ("740+", 740, 999),
+    ]
+    out: List[Dict[str, Any]] = []
+    for label, lo, hi in buckets:
+        in_bucket = [l for l in loans if (l.get("fico_score") or 0) >= lo and (l.get("fico_score") or 0) <= hi]
+        standard = [l for l in in_bucket if l.get("program_type") == "Standard"]
+        dpa = [l for l in in_bucket if l.get("program_type") == "DPA"]
+        s_dq = sum(1 for l in standard if l.get("is_delinquent"))
+        d_dq = sum(1 for l in dpa if l.get("is_delinquent"))
+        out.append({
+            "label": label,
+            "standardDQ": (s_dq / len(standard) * 100.0) if standard else 0.0,
+            "dpaDQ": (d_dq / len(dpa) * 100.0) if dpa else 0.0,
+            "dpaTotal": len(dpa),
+        })
+    return out
+
+
+def _rf_offices(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Approximate the TS OfficeSummary shape from HUD Office + loan rows.
+
+    Only the fields consumed by ``buildDataSummary`` in aiAnalysis.ts are
+    populated. This intentionally does NOT re-run the full Revised-CR /
+    Enhanced Guidelines pipeline that ``computeOffices`` performs — the
+    Portfolio Risk Factor bullets don't need it, and duplicating that math
+    in Python would create a second source of truth for committee numbers.
+    """
+    hud_rows = {(r.get("hud_office") or "").upper().strip(): r for r in snapshot.get("compare_ratios_hud_office", [])}
+    by_office: Dict[str, List[dict]] = {}
+    for l in snapshot.get("loans", []):
+        by_office.setdefault(l.get("hud_office") or "", []).append(l)
+
+    offices: List[Dict[str, Any]] = []
+    for name, o_loans in by_office.items():
+        total = len(o_loans)
+        retail = [l for l in o_loans if l.get("channel") == "Retail"]
+        ws = [l for l in o_loans if l.get("channel") == "Wholesale"]
+        total_dlq = sum(1 for l in o_loans if l.get("is_delinquent"))
+        hud = hud_rows.get(name.upper().strip())
+        offices.append({
+            "name": name,
+            "totalCR": (hud.get("compare_ratio") if hud else None) or 0,
+            "retailCR": (hud.get("retail_ratio") if hud else None),
+            "wsCR": (hud.get("sponsor_ratio") if hud else None),
+            "totalLoans": total,
+            "totalDLQ": total_dlq,
+            "retailBoostDLQ": sum(1 for l in retail if l.get("is_delinquent") and l.get("is_boost")),
+            "wsBoostDLQ": sum(1 for l in ws if l.get("is_delinquent") and l.get("is_boost")),
+            "retailOtherDPADLQ": sum(1 for l in retail if l.get("is_delinquent") and l.get("has_dpa") and not l.get("is_boost")),
+            "wsOtherDPADLQ": sum(1 for l in ws if l.get("is_delinquent") and l.get("has_dpa") and not l.get("is_boost")),
+            "retailNonDPADLQ": sum(1 for l in retail if l.get("is_delinquent") and not l.get("has_dpa")),
+            "wsNonDPADLQ": sum(1 for l in ws if l.get("is_delinquent") and not l.get("has_dpa")),
+            # `revisedTotal*CR` are Revised-CR outputs (Enhanced Guidelines math)
+            # not reproduced in Python. Surfaced as ``None`` — the prompt template
+            # renders them as "None" which is honest for the build-time bake.
+            "revisedTotalCR": None,
+            "revisedRetailCR": None,
+            "revisedWSCR": None,
+            "retailDPAConc": (len([l for l in retail if l.get("has_dpa")]) / len(retail) * 100.0) if retail else 0.0,
+            "wsDPAConc": (len([l for l in ws if l.get("has_dpa")]) / len(ws) * 100.0) if ws else 0.0,
+            "totalDPAConc": (len([l for l in o_loans if l.get("has_dpa")]) / total * 100.0) if total else 0.0,
+        })
+    return offices
+
+
+def _rf_dpa_programs(loans: List[dict]) -> List[Dict[str, Any]]:
+    """Port of ``computeDPAPrograms`` (program × investor rollup)."""
+    def _prog_label(raw: Any) -> str:
+        s = (str(raw) if raw is not None else "").strip()
+        if not s:
+            return "Non-DPA"
+        lower = s.lower()
+        if "boost" in lower:
+            return "Boost"
+        if "arrive" in lower or "aurora" in lower:
+            return "Arrive/Aurora"
+        return s
+
+    def _inv_label(raw: Any) -> str:
+        s = (str(raw) if raw is not None else "").strip()
+        return s or "Unassigned"
+
+    dpa_loans = [l for l in loans if l.get("has_dpa")]
+    total_dpa = len(dpa_loans)
+
+    by_program: Dict[str, List[dict]] = {}
+    for l in dpa_loans:
+        by_program.setdefault(_prog_label(l.get("dpa_program")), []).append(l)
+
+    programs: List[Dict[str, Any]] = []
+    for program, p_loans in by_program.items():
+        p_total = len(p_loans)
+        p_dlq = sum(1 for l in p_loans if l.get("is_delinquent"))
+        by_investor: Dict[str, List[dict]] = {}
+        for l in p_loans:
+            # Committee-relevant investor is `investor_name` (matches TS), not `dpa_investor`.
+            by_investor.setdefault(_inv_label(l.get("investor_name")), []).append(l)
+        investors = [
+            {
+                "investor": inv,
+                "totalLoans": len(i_loans),
+                "delinquent": sum(1 for l in i_loans if l.get("is_delinquent")),
+                "dqRate": (sum(1 for l in i_loans if l.get("is_delinquent")) / len(i_loans) * 100.0) if i_loans else 0.0,
+                "pctOfProgramVolume": (len(i_loans) / p_total * 100.0) if p_total else 0.0,
+                "pctOfDPAVolume": (len(i_loans) / total_dpa * 100.0) if total_dpa else 0.0,
+            }
+            for inv, i_loans in by_investor.items()
+        ]
+        investors.sort(key=lambda i: -i["delinquent"])
+        programs.append({
+            "program": program,
+            "totalLoans": p_total,
+            "delinquent": p_dlq,
+            "dqRate": (p_dlq / p_total * 100.0) if p_total else 0.0,
+            "pctOfDPAVolume": (p_total / total_dpa * 100.0) if total_dpa else 0.0,
+            "investors": investors,
+        })
+    programs.sort(key=lambda p: -p["delinquent"])
+    return programs
+
+
+def _build_risk_factor_facts(snapshot: Dict[str, Any]) -> str:
+    """Port of ``buildDataSummary`` from ``src/lib/aiAnalysis.ts``.
+
+    Returns the exact same free-form string the frontend today assembles
+    from ``DashboardData`` so the LLM sees identical facts whether the
+    bullets are baked (this function) or regenerated live via the SWA
+    proxy (PR B).
+
+    Any field the TS version references but that isn't populated on the
+    snapshot is defaulted to a safe zero / "None" so the resulting prompt
+    text is stable and readable — the LLM will just skip missing dimensions.
+    """
+    loans = snapshot.get("loans", []) or []
+    total_loans = len(loans)
+    total_dlq = sum(1 for l in loans if l.get("is_delinquent"))
+    total_dpa = sum(1 for l in loans if l.get("has_dpa"))
+    overall_dq_rate = (total_dlq / total_loans * 100.0) if total_loans else 0.0
+    dpa_portfolio_conc = (total_dpa / total_loans * 100.0) if total_loans else 0.0
+
+    # ── Program composition (Standard vs DPA DQ%) ──
+    standard_loans = [l for l in loans if l.get("program_type") == "Standard"]
+    dpa_loans = [l for l in loans if l.get("program_type") == "DPA"]
+    standard_dq = (sum(1 for l in standard_loans if l.get("is_delinquent")) / len(standard_loans) * 100.0) if standard_loans else 0.0
+    dpa_dq = (sum(1 for l in dpa_loans if l.get("is_delinquent")) / len(dpa_loans) * 100.0) if dpa_loans else 0.0
+    multiplier = f"{dpa_dq / standard_dq:.1f}" if standard_dq > 0 else "N/A"
+
+    retail_summary = _rf_channel_summary(loans, "Retail")
+    ws_summary = _rf_channel_summary(loans, "Wholesale")
+
+    offices = _rf_offices(snapshot)
+    term_offices = [o for o in offices if o["totalCR"] > 200 and o["totalLoans"] > 100]
+    cw_offices = [
+        o for o in offices if
+        (o["totalCR"] > 150 and o["totalCR"] <= 200 and o["totalLoans"] >= 100)
+        or (o["totalCR"] > 200 and o["totalLoans"] < 100)
+    ]
+
+    def _fmt_num_or_na(v):
+        return "N/A" if v is None else v
+
+    term_offices.sort(key=lambda o: -o["totalCR"])
+    term_details_lines: List[str] = []
+    for o in term_offices:
+        boost_dlq = o["retailBoostDLQ"] + o["wsBoostDLQ"]
+        other_dpa_dlq = o["retailOtherDPADLQ"] + o["wsOtherDPADLQ"]
+        non_dpa_dlq = o["retailNonDPADLQ"] + o["wsNonDPADLQ"]
+        term_details_lines.append(
+            f"  - {o['name']}: Total CR {o['totalCR']}% "
+            f"(Retail {_fmt_num_or_na(o['retailCR'])}%, WS {_fmt_num_or_na(o['wsCR'])}%), "
+            f"{o['totalLoans']} loans, {o['totalDLQ']} DLQ "
+            f"({non_dpa_dlq} Non-DPA, {boost_dlq} Boost, {other_dpa_dlq} Other DPA), "
+            f"Revised CR after Boost removal: {_fmt_num_or_na(o['revisedTotalCR'])}% "
+            f"(Retail {_fmt_num_or_na(o['revisedRetailCR'])}%, WS {_fmt_num_or_na(o['revisedWSCR'])}%), "
+            f"DPA Conc: Retail {o['retailDPAConc']:.1f}% / WS {o['wsDPAConc']:.1f}%"
+        )
+    term_details = "\n".join(term_details_lines)
+
+    cw_offices.sort(key=lambda o: -o["totalCR"])
+    cw_top5_lines: List[str] = [
+        f"  - {o['name']}: Total CR {o['totalCR']}%, {o['totalLoans']} loans, {o['totalDLQ']} DLQ, DPA Conc: {o['totalDPAConc']:.1f}%"
+        for o in cw_offices[:5]
+    ]
+    cw_top5 = "\n".join(cw_top5_lines)
+
+    programs = _rf_dpa_programs(loans)
+    programs.sort(key=lambda p: -p["delinquent"])
+    program_breakdown_lines: List[str] = []
+    for p in programs:
+        investor_lines = [
+            f"      · Investor {i['investor']}: {i['totalLoans']} loans, {i['delinquent']} DLQ ({i['dqRate']:.1f}%), {i['pctOfProgramVolume']:.1f}% of program"
+            for i in p["investors"][:5]
+        ]
+        prog_line = (
+            f"  - Program {p['program']}: {p['totalLoans']} loans, {p['delinquent']} DLQ "
+            f"({p['dqRate']:.1f}%), {p['pctOfDPAVolume']:.1f}% of DPA volume"
+        )
+        if investor_lines:
+            prog_line += "\n" + "\n".join(investor_lines)
+        program_breakdown_lines.append(prog_line)
+    program_breakdown = "\n".join(program_breakdown_lines)
+
+    fico_buckets = _rf_fico_buckets(loans)
+    fico_lines = "\n".join(
+        f"  {b['label']}: Standard {b['standardDQ']:.1f}%, DPA {b['dpaDQ']:.1f}% ({b['dpaTotal']} DPA loans)"
+        for b in fico_buckets
+    )
+
+    # ── Trend dimensions (raw group labels from Encompass) ──
+    aus_types = _rf_group_by(loans, lambda l: l.get("aus"), min_count=10)
+    manual = [l for l in loans if "MANUAL" in (l.get("aus") or "").upper()]
+    auto = [l for l in loans if "MANUAL" not in (l.get("aus") or "").upper() and (l.get("aus") or "") != ""]
+    manual_uw_rate = (len(manual) / total_loans * 100.0) if total_loans else 0.0
+    manual_uw_dq = (sum(1 for l in manual if l.get("is_delinquent")) / len(manual) * 100.0) if manual else 0.0
+    auto_uw_dq = (sum(1 for l in auto if l.get("is_delinquent")) / len(auto) * 100.0) if auto else 0.0
+
+    ltv_groups = _rf_group_by(loans, lambda l: l.get("ltv_group"))
+    fthb_groups = _rf_group_by(loans, lambda l: l.get("fthb"), min_count=10)
+    dti_groups = _rf_group_by(loans, lambda l: l.get("dti_back_end_group"))
+    pay_shock_groups = _rf_group_by(loans, lambda l: l.get("payment_shock_group"))
+    sof_groups = _rf_group_by(loans, lambda l: l.get("source_of_funds_group"))
+    reserves_groups = _rf_group_by(loans, lambda l: l.get("reserves_group"))
+    risk_ind_groups = _rf_group_by(
+        loans, lambda l: _rf_risk_indicator_label(l.get("risk_indicator_count")), min_count=10
+    )
+    gg_groups = _rf_group_by(loans, lambda l: l.get("gift_grant_group"))
+
+    def _fmt_trend(rows: List[Dict[str, Any]], label_prefix: str = "", label_suffix: str = "") -> str:
+        return "\n".join(
+            f"  {label_prefix}{r['label']}{label_suffix}: {r['dqRate']:.1f}% ({r['dlq']}/{r['total']})"
+            for r in rows
+        )
+
+    return f"""FHA LOAN PORTFOLIO ANALYSIS DATA:
+
+PORTFOLIO OVERVIEW:
+- Total Loans: {total_loans:,}
+- Overall DQ Rate: {overall_dq_rate:.2f}%
+- DPA Portfolio Concentration: {dpa_portfolio_conc:.1f}%
+- Program DQ Rates: Standard FHA {standard_dq:.2f}%, DPA {dpa_dq:.2f}% ({multiplier}x standard rate)
+- NOTE: "FUEL" is not a distinct program — it was Standard FHA run through the Wholesale channel. Use the Retail vs Wholesale channel breakdown below to see what was previously labeled "FUEL" performance (wholesale-channel Standard FHA).
+
+CHANNEL COMPARISON:
+- Retail: {retail_summary['totalLoans']} loans, DPA Conc {retail_summary['dpaConc']:.1f}%, DQ Rate {retail_summary['overallDQRate']:.2f}%, DPA DQ {retail_summary['dpaDQRate']:.2f}%
+- Wholesale: {ws_summary['totalLoans']} loans, DPA Conc {ws_summary['dpaConc']:.1f}%, DQ Rate {ws_summary['overallDQRate']:.2f}%, DPA DQ {ws_summary['dpaDQRate']:.2f}%
+
+TERMINATION RISK OFFICES ({len(term_offices)} offices, >200% CR + >100 loans):
+{term_details or '  None'}
+
+TOP 5 CREDIT WATCH OFFICES:
+{cw_top5 or '  None'}
+Total Credit Watch: {len(cw_offices)} offices
+
+DPA PROGRAM × INVESTOR BREAKDOWN (primary = DPA Program, secondary = DPA Investor):
+{program_breakdown}
+
+FICO ANALYSIS:
+{fico_lines}
+
+UNDERWRITING & RISK FACTOR TRENDS:
+
+AUS Type DQ Rates:
+{_fmt_trend(aus_types)}
+  Manual UW = {manual_uw_rate:.1f}% of portfolio, DQ rate {manual_uw_dq:.1f}% vs Auto {auto_uw_dq:.1f}%
+
+LTV Group DQ Rates (higher LTV = more risk):
+{_fmt_trend(ltv_groups)}
+
+First-Time Homebuyer DQ Rates:
+{_fmt_trend(fthb_groups, label_prefix='FTHB=')}
+
+DTI Back-End Group DQ Rates:
+{_fmt_trend(dti_groups)}
+
+Payment Shock Group DQ Rates:
+{_fmt_trend(pay_shock_groups)}
+
+Source of Funds DQ Rates:
+{_fmt_trend(sof_groups)}
+
+Reserves (months) DQ Rates:
+{_fmt_trend(reserves_groups, label_suffix=' months')}
+
+Risk Indicator Count DQ Rates (layered risk):
+{_fmt_trend(risk_ind_groups, label_suffix=' indicators')}
+
+Gift/Grant Funding % DQ Rates:
+{_fmt_trend(gg_groups)}
+
+KEY THRESHOLDS:
+- Compare Ratio >200%: Termination risk (HUD can suspend underwriting)
+- Compare Ratio 150-200%: Credit watch
+- DPA Concentration >40%: High risk
+- Each HUD office can independently enforce at >200%"""
+
+
+def _normalize_risk_factor_bullet(item: Any) -> Optional[Dict[str, str]]:
+    """Validate one model-returned bullet — drop junk silently."""
+    if not isinstance(item, dict):
+        return None
+    text = str(item.get("text") or "").strip()
+    severity = str(item.get("severity") or "").strip().lower()
+    if severity not in _VALID_RISK_SEVERITIES:
+        severity = "neutral"
+    if not text:
+        return None
+    return {"text": text, "severity": severity}
+
+
+def _parse_risk_factor_response(raw: str) -> List[Dict[str, str]]:
+    """Parse the LLM JSON body, extracting only ``executiveSummary`` bullets.
+
+    Returns ``[]`` on any parse/validation failure — never raises. Action
+    items are intentionally discarded; PR B introduces the write-back path
+    that populates them separately.
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        cleaned = raw.strip().strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            print("  WARN: risk-factor LLM returned non-JSON — dropping bullets")
+            return []
+    if not isinstance(parsed, dict):
+        print("  WARN: risk-factor LLM response was not a JSON object — dropping bullets")
+        return []
+    items = parsed.get("executiveSummary")
+    if not isinstance(items, list):
+        print("  WARN: risk-factor LLM response missing 'executiveSummary' list — dropping bullets")
+        return []
+    bullets = [b for b in (_normalize_risk_factor_bullet(i) for i in items) if b is not None]
+    if not bullets:
+        print("  WARN: risk-factor LLM returned 0 valid bullets — dropping bullets")
+    return bullets
+
+
+def _call_risk_factor_azure(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    endpoint: str,
+    deployment: str,
+    api_key: str,
+    api_version: str,
+) -> List[Dict[str, str]]:
+    """Call Azure OpenAI for risk-factor bullets. Returns [] on any error."""
+    try:
+        from openai import AzureOpenAI  # type: ignore
+    except ImportError:
+        print("  WARN: openai package not installed — skipping risk_factor_bullets")
+        return []
+    try:
+        client = AzureOpenAI(
+            api_version=api_version,
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            timeout=60.0,
+        )
+        print(f"  Calling Azure OpenAI for risk factors ({endpoint}, deployment={deployment})…")
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+            max_tokens=4000,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"  WARN: risk-factor Azure call failed ({e!r}) — dropping bullets")
+        return []
+    return _parse_risk_factor_response(raw)
+
+
+def _call_risk_factor_litellm(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+) -> List[Dict[str, str]]:
+    """Call LiteLLM proxy for risk-factor bullets. Returns [] on any error."""
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        print("  WARN: openai package not installed — skipping risk_factor_bullets")
+        return []
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key, timeout=60.0)
+        print(f"  Calling LiteLLM proxy for risk factors ({base_url}, model={model})…")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+            max_tokens=4000,
+        )
+        raw = resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"  WARN: risk-factor LiteLLM call failed ({e!r}) — dropping bullets")
+        return []
+    return _parse_risk_factor_response(raw)
+
+
+def build_risk_factor_bullets(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Generate the 6 Portfolio Risk Factor bullets used by the Executive Summary.
+
+    Provider selection mirrors ``build_ai_insights``:
+
+    1. **Azure OpenAI (primary)** — used when all three of
+       ``AZURE_OPENAI_ENDPOINT``, ``AZURE_OPENAI_DEPLOYMENT``,
+       ``AZURE_OPENAI_API_KEY`` are set. ``AZURE_OPENAI_API_VERSION``
+       defaults to ``2025-01-01-preview`` when unset.
+
+    2. **LiteLLM proxy (fallback)** — used when the Azure vars aren't
+       all set but ``AFN_LITELLM_API_KEY`` is. Local-dev only.
+
+    3. **No config** — logs a WARN and returns ``[]`` so the snapshot
+       build never fails just because the LLM is unreachable.
+
+    The prompt lives in ``data/prompts/risk-factor-analysis.system.md`` and
+    is shared with PR B's ``/api/ai-analysis`` regenerate endpoint. If the
+    file is missing this function logs a WARN and returns ``[]``.
+    """
+    system_prompt = _load_risk_factor_prompt()
+    if system_prompt is None:
+        return []
+
+    try:
+        facts = _build_risk_factor_facts(snapshot)
+    except Exception as e:  # defensive: fact assembly must never crash the build
+        print(f"  WARN: risk-factor facts assembly failed ({e!r}) — dropping bullets")
+        return []
+
+    user_prompt = (
+        "Analyze this FHA portfolio data and generate the executive summary and action items:\n\n"
+        + facts
+    )
+
+    az_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    az_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+    az_api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    az_api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+
+    if az_endpoint and az_deployment and az_api_key:
+        return _call_risk_factor_azure(
+            system_prompt,
+            user_prompt,
+            endpoint=az_endpoint,
+            deployment=az_deployment,
+            api_key=az_api_key,
+            api_version=az_api_version,
+        )
+
+    litellm_key = os.environ.get("AFN_LITELLM_API_KEY")
+    if litellm_key:
+        base_url = os.environ.get(
+            "AFN_LITELLM_BASE_URL", "http://100.120.169.17:4000/v1"
+        )
+        model = os.environ.get("AFN_LITELLM_INSIGHT_MODEL", "gpt-4o")
+        return _call_risk_factor_litellm(
+            system_prompt,
+            user_prompt,
+            base_url=base_url,
+            api_key=litellm_key,
+            model=model,
+        )
+
+    print(
+        "  WARN: no AI provider configured for risk_factor_bullets "
+        "(set AZURE_OPENAI_* or AFN_LITELLM_API_KEY) — dropping bullets"
+    )
+    return []
+
+
 def build_ai_insights(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
     """Generate 4 AI insights, preferring Azure OpenAI over LiteLLM.
 
@@ -2232,6 +2828,24 @@ def main() -> int:
     print("Generating AI insights…")
     snapshot["ai_insights"] = build_ai_insights(snapshot)
     print(f"  {len(snapshot['ai_insights'])} insight(s) produced")
+
+    # ── Portfolio Risk Factor bullets (baked at build time; see PR A/B) ──
+    # Frontend Executive Summary card historically fetched these via
+    # /api/ai-analysis on every period load. Baking them into the snapshot
+    # removes that per-load cost. PR B introduces the on-demand "regenerate"
+    # write-back path that mutates the ``regenerated_*`` fields below.
+    print("Generating Portfolio Risk Factor bullets…")
+    _rfb_generated_by = snapshot["snapshot_meta"]["generated_by"]
+    _rfb_bullets = build_risk_factor_bullets(snapshot)
+    snapshot["risk_factor_bullets"] = {
+        "bullets": _rfb_bullets,
+        "generated_at": snapshot["snapshot_meta"]["generated_at"],
+        "generated_by": _rfb_generated_by,
+        "regenerated_by": None,
+        "regenerated_at": None,
+        "schema_version": RISK_FACTOR_BULLETS_SCHEMA_VERSION,
+    }
+    print(f"  {len(_rfb_bullets)} risk-factor bullet(s) baked")
 
     # ── Write ──
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)

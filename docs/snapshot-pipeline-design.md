@@ -276,3 +276,83 @@ Once shipped, one full end-to-end verification cycle:
 8. Zero git commits, zero deploys, zero human touches
 
 If any of those don't happen: rollback per the plan above, root-cause, retry.
+
+---
+
+## Snapshot field: `risk_factor_bullets` (PR A / PR B, 2026-08-11)
+
+**Status:** PR A landed — bake at build time. PR B forthcoming — frontend consumer + on-demand regenerate write-back.
+**Driver:** Michael Kunisaki
+**Owner:** ATLAS + dev-architect subagent
+
+### Motivation
+
+The Executive Summary card renders 6 AI-generated bullets summarizing risk-factor trends (Manual UW vs Auto, LTV bands, DTI, payment shock, reserves, source of funds, layered risk indicators). Historically the frontend calls `/api/ai-analysis` (Azure OpenAI proxy → `brady-wu-ai/gpt-4-brady`) on every period load unless cached in browser `sessionStorage`. Three problems:
+
+- **Cost** — every reviewer, every period switch, one LLM round-trip. Multiplies with committee size and audit reruns.
+- **Latency** — the card blocks on a ~10–20s Azure OpenAI call after page load.
+- **Cross-user duplication** — each user's `sessionStorage` cache is siloed; two reviewers looking at the same month generate the same bullets twice.
+
+Baking the bullets into the snapshot at pipeline build time makes them a first-class artifact alongside `ai_insights`, `projections`, `underwriter_rollup`, etc.
+
+### Schema
+
+New optional top-level field on `snapshots/{period}.json`:
+
+```json
+"risk_factor_bullets": {
+  "bullets": [
+    { "text": "...", "severity": "red|yellow|green|neutral" }
+  ],
+  "generated_at": "<ISO-8601>",
+  "generated_by": "scripts/build-snapshot.py v<version>",
+  "regenerated_by": null,
+  "regenerated_at": null,
+  "schema_version": 1
+}
+```
+
+- **`bullets`** — usually 6, but the prompt does not hard-cap; PR B's frontend must render 0–N gracefully. Each bullet is a `{text, severity}` pair. Severity maps to the existing red/yellow/green/neutral treatments the Executive Summary card already uses.
+- **`generated_at` / `generated_by`** — populated by the initial bake. `generated_by` mirrors `snapshot_meta.generated_by` (same `SCRIPT_VERSION`).
+- **`regenerated_at` / `regenerated_by`** — always `null` in a fresh bake. Mutated by PR B's on-demand regenerate write-back path: when a reviewer clicks "regenerate" in the Executive Summary card, the SWA API replaces `bullets` and stamps `regenerated_at = now`, `regenerated_by = Entra oid`. The initial `generated_*` fields stay intact so provenance survives regenerates.
+- **`schema_version`** — `1` at launch. Bump if we ever add/remove fields.
+- **Optional on `Snapshot`** — historical snapshots (Feb–May 2026, built before this feature) don't carry the field. Frontend consumers must feature-detect and fall back to the legacy on-demand fetch when absent.
+
+### Provenance semantics
+
+| Scenario | `generated_at` / `generated_by` | `regenerated_at` / `regenerated_by` |
+|---|---|---|
+| Fresh bake, never regenerated | Set by build-snapshot.py | `null` |
+| Reviewer clicked "regenerate" once | Preserved (original bake) | Set by SWA API to now + reviewer's Entra `oid` |
+| Reviewer regenerated multiple times | Preserved (original bake) | Overwritten each time with the latest regenerate |
+| Full snapshot rebuild via pipeline | Overwritten (new bake) | Reset to `null` |
+
+Interpretation: `generated_*` is the immutable canonical bake; `regenerated_*` is the "if I look at this today, whose version am I seeing?" audit hook.
+
+### Shared prompt file
+
+Both callers load the exact same system prompt from `data/prompts/risk-factor-analysis.system.md`:
+
+1. **`scripts/build-snapshot.py :: build_risk_factor_bullets()`** — the build-time bake (PR A).
+2. **`api/ai-analysis/index.js`** — the SWA proxy that lets reviewers regenerate on demand (PR B; today the prompt is a string literal in `src/lib/aiAnalysis.ts`).
+
+Any prompt change here affects both callers. If you're tuning the prompt for one caller only, you're doing it wrong: either add a second file with a distinct name, or split the callers first. The prompt requests both `executiveSummary` and `actionItems` fields; PR A discards `actionItems` (they're unused today) but keeps them in the response schema so PR B's regenerate path can share the file byte-for-byte.
+
+The Dockerfile bundles `data/prompts/` alongside `scripts/build-snapshot.py` so the Container App runtime has the file on disk.
+
+### Failure semantics
+
+`build_risk_factor_bullets` **never** raises. On any error — missing prompt file, missing `AZURE_OPENAI_*` config, LLM timeout, malformed JSON response, missing `executiveSummary` key — it logs a WARN line and returns `[]`. The snapshot build continues and writes a `risk_factor_bullets.bullets = []` shape. The frontend (PR B) treats an empty bullet list as "show the on-demand regenerate button prominently" so a bad bake still degrades gracefully.
+
+This matches the design principle from `build_ai_insights`: the LLM is nice-to-have, not load-bearing. Pipeline reliability > AI narrative.
+
+### Forward reference: PR B
+
+PR B (the paired follow-up PR, not yet open) covers:
+
+1. `src/components/ExecutiveSummary.tsx` reads `snapshot.risk_factor_bullets?.bullets` first; falls back to the legacy `/api/ai-analysis` call only when the field is absent or empty.
+2. Delete the browser `sessionStorage` cache in `src/lib/aiAnalysis.ts` (baking makes it redundant).
+3. `api/ai-analysis/index.js` gains a "regenerate" mode that reads `data/prompts/risk-factor-analysis.system.md`, calls Azure OpenAI, and writes back to `snapshots/{period}.json` with updated `regenerated_at` / `regenerated_by`. Uses managed identity + blob lease for the write path.
+4. Frontend button on the Executive Summary card that hits the regenerate endpoint; shows a spinner while the write is in flight.
+
+Until PR B lands, the frontend continues to work exactly as it does today — it just ignores the new field. That's why PR A is safe to merge on its own.

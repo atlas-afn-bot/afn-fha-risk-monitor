@@ -46,6 +46,12 @@ COPY --chown=pipeline:pipeline scripts/build-snapshot.py           /opt/repo/scr
 COPY --chown=pipeline:pipeline scripts/build_projections.py        /opt/repo/scripts/build_projections.py
 COPY --chown=pipeline:pipeline scripts/build_projections_report.py /opt/repo/scripts/build_projections_report.py
 
+# LLM prompts loaded from disk at runtime (resolved relative to REPO_ROOT).
+# build-snapshot.py :: _load_risk_factor_prompt() reads
+# data/prompts/risk-factor-analysis.system.md. Bundle the whole prompts/
+# dir so new prompt files land in the image without another Dockerfile edit.
+COPY --chown=pipeline:pipeline data/prompts/                       /opt/repo/data/prompts/
+
 # App source
 WORKDIR /app
 COPY --chown=pipeline:pipeline container/app.py /app/app.py
