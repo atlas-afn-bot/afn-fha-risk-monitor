@@ -149,13 +149,214 @@ def _case_norm(v: Any) -> Optional[str]:
     return s.upper()
 
 
-def _find_source(period: str, pattern: str) -> Path:
-    """Locate a source Excel under data/source/{period}/ by glob."""
+# BIFF (real Excel 97-2003 .xls) magic number — D0 CF 11 E0 A1 B1 1A E1.
+_BIFF_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _xls_to_xlsx(xls_path: Path) -> Path:
+    """Convert a legacy ``.xls`` file to ``.xlsx`` in the same directory.
+
+    Downstream readers use ``openpyxl``/``pd.read_excel(engine="openpyxl")``,
+    which cannot open ``.xls``. RPA occasionally uploads ``.xls`` — and in
+    HUD's case, "``.xls``" is often a **tab-delimited text file** with an
+    ``.xls`` extension (HUD Neighborhood Watch's "Export to Excel" quirk),
+    not a real BIFF workbook.
+
+    This helper detects which flavor we have and normalizes both to a proper
+    ``.xlsx`` so the rest of the pipeline stays engine-agnostic.
+
+    The converted file is cached next to the source and reused on re-runs.
+    Requires ``xlrd`` (pinned in ``scripts/requirements.txt``) for real BIFF.
+    """
+    from openpyxl import Workbook
+
+    out_path = xls_path.with_suffix(".xlsx")
+    if out_path.exists() and out_path.stat().st_mtime >= xls_path.stat().st_mtime:
+        return out_path
+
+    with open(xls_path, "rb") as fh:
+        head = fh.read(8)
+
+    if head.startswith(_BIFF_MAGIC):
+        # Real Excel 97-2003 workbook — use xlrd.
+        import xlrd  # lazy import
+        book = xlrd.open_workbook(str(xls_path), formatting_info=False)
+        wb = Workbook()
+        default = wb.active
+        wb.remove(default)
+        for sheet_name in book.sheet_names():
+            sh = book.sheet_by_name(sheet_name)
+            ws = wb.create_sheet(title=sheet_name[:31] or "Sheet1")
+            for r in range(sh.nrows):
+                row_vals = []
+                for c in range(sh.ncols):
+                    cell = sh.cell(r, c)
+                    if cell.ctype == xlrd.XL_CELL_DATE:
+                        try:
+                            row_vals.append(
+                                xlrd.xldate.xldate_as_datetime(cell.value, book.datemode)
+                            )
+                        except Exception:
+                            row_vals.append(cell.value)
+                    elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                        row_vals.append(bool(cell.value))
+                    elif cell.ctype == xlrd.XL_CELL_ERROR:
+                        row_vals.append(None)
+                    else:
+                        row_vals.append(cell.value)
+                ws.append(row_vals)
+        wb.save(str(out_path))
+        return out_path
+
+    # Not BIFF — assume a delimited text file (HUD NW "Export to Excel" ships
+    # tab-separated text with an .xls extension). Read it as text and
+    # re-shape row-by-row into an xlsx. Rows use CR / CRLF / LF terminators.
+    raw_bytes = xls_path.read_bytes()
+    for enc in ("utf-8", "utf-16", "cp1252", "latin-1"):
+        try:
+            text = raw_bytes.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:  # pragma: no cover — latin-1 above should always succeed
+        text = raw_bytes.decode("latin-1", errors="replace")
+
+    # Normalize line endings (HUD uses CR-only for some files, CRLF for others).
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+
+    # Sniff delimiter: HUD ships \t, but some exports use commas. Pick whichever
+    # produces more columns on the first non-empty line.
+    sample = next((l for l in lines if l.strip()), "")
+    delim = "\t" if sample.count("\t") >= sample.count(",") else ","
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for line in lines:
+        if not line and not lines:  # skip a single trailing empty split
+            continue
+        ws.append(line.split(delim))
+    wb.save(str(out_path))
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Slot alias table — canonical + RPA + legacy naming conventions.
+#
+# Callers pass a slot key; ``_find_source`` walks the candidate globs in order
+# (first hit wins, with an .xlsx-over-.xls tiebreaker). Adding a new naming
+# convention means appending one string here — nothing else changes.
+# ---------------------------------------------------------------------------
+SLOT_ALIAS_TABLE: Dict[str, List[str]] = {
+    "hud_total_compare_ratios": [
+        "HUD Total Compare Ratios*.xlsx",     # legacy / manual naming
+        "HUD_National_Totals*.xlsx",          # 2026-06+ RPA naming
+        "HUD_Total_Compare_Ratio*.xlsx",
+        "HUD Total Compare Ratios*.xls",
+        "HUD_National_Totals*.xls",
+        "HUD_Total_Compare_Ratio*.xls",       # 2026-05 RPA naming (.xls)
+    ],
+    "hoc_compare_ratios": [
+        "HOC Compare Ratios*.xlsx",
+        "HOCs*.xlsx",                         # 2026-06+ RPA naming
+        "HOC_Compare_Ratios*.xlsx",
+        "HOC Compare Ratios*.xls",
+        "HOCs*.xls",
+        "HOC_Compare_Ratios*.xls",            # 2026-05 RPA naming (.xls)
+    ],
+    "hud_field_offices": [
+        "HUD Field Offices*.xlsx",
+        "HUD_Office*.xlsx",                   # 2026-06+ RPA naming (singular)
+        "HUD_Offices*.xlsx",
+        "HUD Field Offices*.xls",
+        "HUD_Office*.xls",
+        "HUD_Offices*.xls",                   # 2026-05 RPA naming (.xls)
+    ],
+    "hud_branches": [
+        "HUD Branches*.xlsx",
+        "Branches*.xlsx",                     # 2026-06+ RPA naming
+        "HUD_Branches*.xlsx",
+        "HUD Branches*.xls",
+        "Branches*.xls",
+        "HUD_Branches*.xls",                  # 2026-05 RPA naming (.xls)
+    ],
+    "nw_data": [
+        "NW Data*.xlsx",
+        "NW_Data*.xlsx",                      # 2026-06+ RPA naming
+        "NW Data*.xls",
+        "NW_Data*.xls",                       # 2026-05 RPA naming (.xls)
+    ],
+    "hud_total_population": [
+        "NW Total Population*.xlsx",
+        "NW_Total_Population*.xlsx",
+        "NW Total Population*.xls",
+        "NW_Total_Population*.xls",
+    ],
+}
+
+
+def _find_source(period: str, slot_or_pattern) -> Path:
+    """Locate a source Excel under ``data/source/{period}/``.
+
+    ``slot_or_pattern`` may be one of:
+
+    * a **slot key** from :data:`SLOT_ALIAS_TABLE` (preferred),
+    * a **list of glob patterns** (first hit wins), or
+    * a **single glob pattern** (legacy shape — kept for callers that pass a raw glob).
+
+    Selection rules when multiple candidates match:
+
+    1. Prefer ``.xlsx`` over ``.xls`` (openpyxl-native beats legacy BIFF).
+    2. Then most-recent ``mtime``.
+
+    ``.xls`` matches are transparently converted to ``.xlsx`` in-place
+    (see :func:`_xls_to_xlsx`) so downstream readers never see BIFF files.
+
+    If nothing matches, raises ``FileNotFoundError`` listing **every** glob
+    that was tried — not just the first — so operators can see what the
+    script expected vs. what the RPA actually uploaded.
+    """
     base = SOURCE_ROOT / period
-    candidates = sorted(base.glob(pattern))
-    if not candidates:
-        raise FileNotFoundError(f"No file matches {pattern!r} in {base}")
-    return candidates[0]
+
+    if isinstance(slot_or_pattern, str) and slot_or_pattern in SLOT_ALIAS_TABLE:
+        patterns = list(SLOT_ALIAS_TABLE[slot_or_pattern])
+        label = slot_or_pattern
+    elif isinstance(slot_or_pattern, (list, tuple)):
+        patterns = list(slot_or_pattern)
+        label = None
+    else:
+        patterns = [str(slot_or_pattern)]
+        label = None
+
+    # (pattern, path) tuples for every match across every glob.
+    hits: List[Tuple[str, Path]] = []
+    for pat in patterns:
+        for p in sorted(base.glob(pat)):
+            hits.append((pat, p))
+
+    if not hits:
+        listing = "\n    ".join(patterns)
+        prefix = f"{label} slot" if label else "any of the expected patterns"
+        raise FileNotFoundError(
+            f"No file matches {prefix} in {base}. Tried:\n    {listing}"
+        )
+
+    # Prefer .xlsx over .xls; then most-recent mtime.
+    def _rank(entry: Tuple[str, Path]) -> Tuple[int, float]:
+        _pat, path = entry
+        ext_rank = 0 if path.suffix.lower() == ".xlsx" else 1  # 0 wins
+        return (ext_rank, -path.stat().st_mtime)
+
+    hits.sort(key=_rank)
+    matched_pattern, chosen = hits[0]
+    print(f"  _find_source: matched {chosen.name!r} via glob {matched_pattern!r}")
+
+    if chosen.suffix.lower() == ".xls":
+        converted = _xls_to_xlsx(chosen)
+        print(f"  _find_source: converted .xls → .xlsx  {chosen.name!r} → {converted.name!r}")
+        return converted
+    return chosen
 
 
 def _title_case_office(name: str) -> str:
@@ -1727,11 +1928,14 @@ def main() -> int:
     print(f"Building snapshot for {period} ({label})")
 
     # ── Source files ──
-    total_path = _find_source(period, "HUD Total Compare Ratios*.xlsx")
-    hoc_path = _find_source(period, "HOC Compare Ratios*.xlsx")
-    field_path = _find_source(period, "HUD Field Offices*.xlsx")
-    branches_path = _find_source(period, "HUD Branches*.xlsx")
-    nw2_path = _find_source(period, "NW Data*.xlsx")
+    # Slot keys resolve through SLOT_ALIAS_TABLE (see _find_source) so we
+    # tolerate every naming convention the RPA — or a human — has ever used,
+    # including legacy ``.xls`` uploads (auto-converted to ``.xlsx``).
+    total_path = _find_source(period, "hud_total_compare_ratios")
+    hoc_path = _find_source(period, "hoc_compare_ratios")
+    field_path = _find_source(period, "hud_field_offices")
+    branches_path = _find_source(period, "hud_branches")
+    nw2_path = _find_source(period, "nw_data")
     enc_candidates = sorted(src.glob("Neighborhood Watch Report*Enc Data*.xlsx")) \
         or sorted(src.glob("*Enc Data*.xlsx"))
     if not enc_candidates:
@@ -1777,7 +1981,7 @@ def main() -> int:
     # to the raw Encompass set (older behavior).
     hud_pop_path: Optional[Path] = None
     try:
-        hud_pop_path = _find_source(period, "NW Total Population*.xlsx")
+        hud_pop_path = _find_source(period, "hud_total_population")
     except FileNotFoundError:
         pass
     hud_pop_by_case: Dict[str, dict] = {}
@@ -1853,6 +2057,13 @@ def main() -> int:
 
     # ── Compose ──
     snapshot = OrderedDict()
+    # Top-level schema fields consumed by the container's write_snapshot_outputs()
+    # (infra/snapshot-pipeline/container/app.py L461–465) when it builds
+    # index.json. Keep in sync with snapshot_meta below — same values, but the
+    # container reads the top-level keys, not the nested meta block.
+    snapshot["period"] = period
+    snapshot["label"] = label
+    snapshot["performance_period"] = perf_date
     snapshot["snapshot_meta"] = {
         "period": period,
         "label": label,
