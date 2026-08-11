@@ -57,6 +57,12 @@
       "methods": ["GET"]
     },
     {
+      "_comment": "On-demand write-back path for the baked Portfolio Risk Factor bullets (PR B). Called by the ExecutiveSummary 'Regenerate' button; the Function reads X-MS-CLIENT-PRINCIPAL to stamp regenerated_by. Entra SSO only, same gate as /api/snapshot/*.",
+      "route": "/api/regenerate-risk-factor-bullets",
+      "allowedRoles": ["authenticated"],
+      "methods": ["POST"]
+    },
+    {
       "route": "/uploads",
       "allowedRoles": ["authenticated"]
     },

@@ -13,6 +13,62 @@ export interface AIBullet {
   severity: 'red' | 'yellow' | 'green' | 'neutral';
 }
 
+/**
+ * Response envelope for POST /api/regenerate-risk-factor-bullets — the PR B
+ * write-back endpoint that mutates `snapshot.risk_factor_bullets` in place.
+ */
+export interface RegenerateRiskFactorBulletsResponse {
+  bullets: AIBullet[];
+  regenerated_at: string;
+  regenerated_by: string;
+}
+
+/**
+ * Ask the SWA regenerate endpoint for fresh Portfolio Risk Factor bullets
+ * and write them back to the snapshot blob. Callers are expected to
+ * invalidate their cached snapshot for the period and re-render.
+ *
+ * The endpoint loads its system prompt from
+ * `data/prompts/risk-factor-analysis.system.md` — the same file the
+ * pipeline bake reads — so the two share one prompt byte-for-byte. The
+ * user prompt is assembled here from the current `DashboardData` using
+ * the same `buildDataSummary()` helper as `generateAIAnalysis()`.
+ */
+export async function regenerateRiskFactorBullets(
+  period: string,
+  data: DashboardData,
+): Promise<RegenerateRiskFactorBulletsResponse> {
+  const facts = buildDataSummary(data);
+  const response = await fetch('/api/regenerate-risk-factor-bullets', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ period, facts }),
+  });
+
+  if (!response.ok) {
+    let msg = `Regenerate failed (${response.status})`;
+    try {
+      const errBody = await response.json();
+      if (errBody && errBody.message) {
+        msg = `Regenerate failed (${response.status}): ${errBody.message}`;
+      }
+    } catch {
+      /* non-JSON error body — keep default message */
+    }
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = response.status;
+    throw err;
+  }
+
+  const parsed = (await response.json()) as RegenerateRiskFactorBulletsResponse;
+  if (!parsed || !Array.isArray(parsed.bullets) || parsed.bullets.length === 0) {
+    throw new Error('Regenerate returned no bullets');
+  }
+  return parsed;
+}
+
 export interface AIActionItem {
   text: string;
   category: 'immediate' | 'monitoring' | 'strategic';
