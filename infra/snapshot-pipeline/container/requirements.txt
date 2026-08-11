@@ -7,6 +7,17 @@ azure-identity>=1.19,<2.0
 azure-storage-blob>=12.24,<13.0
 opencensus-ext-azure>=1.1.14,<2.0
 
-# build-snapshot.py deps — must match projects/afn-fha-risk-monitor/scripts/requirements.txt
+# build-snapshot.py deps — THIS FILE is the pinned source of truth.
+# scripts/requirements.txt has looser bounds for local dev; reconcile there
+# only if a dev-env needs a different constraint.
 openpyxl>=3.1,<4.0
 pandas>=2.2,<3.0
+
+# LLM client for AI insights — Azure OpenAI (build_ai_insights in
+# build-snapshot.py imports `from openai import AzureOpenAI`). Without this,
+# insights silently fall back to a single canned entry.
+openai>=1.40,<2.0
+
+# .xls (legacy BIFF) support — older HUD exports (e.g. 2026-05 uploads) still
+# ship as .xls. pandas.read_excel dispatches to xlrd for that format.
+xlrd>=2.0,<3.0

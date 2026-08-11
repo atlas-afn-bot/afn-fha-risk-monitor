@@ -59,11 +59,38 @@ the CLI creds) OR export a storage connection string via
 
 ## Build + push
 
+The Dockerfile lives in `container/` but `COPY` paths reference sibling
+`scripts/` files, so builds must run from the **repo root** (or from a
+staging dir that mirrors `scripts/` + `container/` under one root).
+
+`APP_VERSION` is a build-arg so `/healthz` reports the real image tag —
+always pass `--build-arg APP_VERSION=$TAG` on build.
+
+### Preferred: `az acr build` (no local docker required)
+
 ```bash
 ACR=crafnfhasnapshotpipeline
-TAG=v0.1.0
+TAG=v0.2.2
+# From repo root:
+az acr build \
+  --registry $ACR \
+  --image snapshot-builder:$TAG \
+  --image snapshot-builder:latest \
+  --build-arg APP_VERSION=$TAG \
+  --file infra/snapshot-pipeline/container/Dockerfile .
+```
+
+### Local docker (dev-only)
+
+```bash
+ACR=crafnfhasnapshotpipeline
+TAG=v0.2.2
 az acr login -n $ACR
-docker build -t $ACR.azurecr.io/snapshot-builder:$TAG .
+# From repo root:
+docker build \
+  --build-arg APP_VERSION=$TAG \
+  -t $ACR.azurecr.io/snapshot-builder:$TAG \
+  -f infra/snapshot-pipeline/container/Dockerfile .
 docker push $ACR.azurecr.io/snapshot-builder:$TAG
 
 # Redeploy the Container App with the new image:

@@ -33,10 +33,18 @@ RUN groupadd --system --gid 1001 pipeline \
 # Bring installed Python deps from the build stage.
 COPY --from=build /install /usr/local
 
-# Bundle the repo's build-snapshot.py at a known path (REPO_ROOT env var).
-# Only the pieces build-snapshot.py needs — no need to copy the whole repo.
+# Bundle the repo's build-snapshot.py + sibling modules it imports at runtime.
+# Update THIS list when build-snapshot.py grows new sibling imports.
+# Runtime sibling imports currently required (as of v0.2.2):
+#   - build_projections            (imported by build-snapshot.py at line ~2215)
+#   - build_projections_report     (imports build_projections; kept alongside for parity)
+# If build-snapshot.py adds `import build_XXX` or `from build_XXX import ...`
+# where build_XXX is a local sibling module, add a matching COPY line below
+# or the container will crash at runtime with ImportError.
 WORKDIR /opt/repo
-COPY --chown=pipeline:pipeline scripts/build-snapshot.py /opt/repo/scripts/build-snapshot.py
+COPY --chown=pipeline:pipeline scripts/build-snapshot.py           /opt/repo/scripts/build-snapshot.py
+COPY --chown=pipeline:pipeline scripts/build_projections.py        /opt/repo/scripts/build_projections.py
+COPY --chown=pipeline:pipeline scripts/build_projections_report.py /opt/repo/scripts/build_projections_report.py
 
 # App source
 WORKDIR /app
@@ -44,10 +52,13 @@ COPY --chown=pipeline:pipeline container/app.py /app/app.py
 
 USER pipeline
 
+# APP_VERSION is a build-arg so /healthz reflects the actual image tag.
+# Pass at build time: az acr build --build-arg APP_VERSION=v0.2.2 ...
+ARG APP_VERSION=dev
 ENV REPO_ROOT=/opt/repo \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    APP_VERSION=0.1.0
+    APP_VERSION=$APP_VERSION
 
 EXPOSE 8080
 

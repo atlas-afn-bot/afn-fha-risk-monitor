@@ -1,3 +1,7 @@
+# NOTE: infra/snapshot-pipeline/container/requirements.txt is the pinned
+# source of truth for the deployed container image. This file has looser
+# bounds for local-dev convenience; keep the package set in sync (adds/removes)
+# but pins may differ.
 openpyxl>=3.1
 pandas>=2.0
 openai>=1.40
