@@ -479,6 +479,7 @@ module.exports = async function (context, req) {
     bullets,
     regenerated_at: nowIso,
     regenerated_by: oid,
+    deployment: DEPLOYMENT,
   });
 };
 

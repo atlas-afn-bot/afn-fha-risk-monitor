@@ -78,6 +78,17 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // `isRegenerating` is a NARROWER loading flag than `aiLoading` — true only
+  // while the write-back regenerate call is in flight (i.e. the snapshot bake
+  // is being replaced). Drives the body-level overlay + success toast, which
+  // must NOT fire on the on-demand `runAI()` path.
+  const [isRegenerating, setIsRegenerating] = useState(false);
+
+  // Ephemeral "just regenerated" toast — populated for ~5s after a successful
+  // write-back so the user sees the model name and timestamp change. Cleared
+  // by a useEffect timer below.
+  const [regenerateToast, setRegenerateToast] = useState<{ deployment?: string; at: string } | null>(null);
+
   // Provenance for the caption (baked or regenerated), driven by whichever
   // is more recent in the snapshot. Updated locally after a successful
   // regenerate so the UI reflects the fresh timestamp without a full
@@ -134,11 +145,13 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
       return;
     }
     setAiLoading(true);
+    setIsRegenerating(true);
     setAiError(null);
     try {
       const resp = await regenerateRiskFactorBullets(period, data);
       setAiBullets(resp.bullets);
       setCaption({ label: 'regenerated', at: resp.regenerated_at });
+      setRegenerateToast({ deployment: resp.deployment, at: resp.regenerated_at });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'AI regenerate failed';
       console.error('Regenerate failed:', e);
@@ -147,6 +160,7 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
       // doesn't lose what they were looking at.
     } finally {
       setAiLoading(false);
+      setIsRegenerating(false);
     }
   }, [snapshot, period, data, runAI]);
 
@@ -157,6 +171,8 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
     setAiBullets(bakedFromSnapshot);
     setAiError(null);
     setAiLoading(false);
+    setIsRegenerating(false);
+    setRegenerateToast(null);
     const rfb = snapshot?.risk_factor_bullets;
     if (rfb?.regenerated_at) {
       setCaption({ label: 'regenerated', at: rfb.regenerated_at });
@@ -166,6 +182,15 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
       setCaption(null);
     }
   }, [bakedFromSnapshot, snapshot, period]);
+
+  // Auto-clear the "just regenerated" toast after ~5s so it doesn't stick
+  // forever. The persistent caption below the bullets already carries the
+  // regenerated_at timestamp long-term.
+  useEffect(() => {
+    if (!regenerateToast) return;
+    const t = setTimeout(() => setRegenerateToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [regenerateToast]);
 
   const dpaConc = data.dpaPortfolioConc;
   const { standardDQ, dpaDQ } = data.programComposition;
@@ -276,13 +301,36 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
                 <span className="text-xs text-muted-foreground">Click "Enhance with AI" to generate risk factor analysis</span>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
-                {displayBullets.map((b, i) => (
-                  <div key={i} className="flex items-start gap-2.5 py-1">
-                    <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${severityDot[b.severity]}`} />
-                    <span className="text-xs leading-relaxed text-foreground">{b.text}</span>
+              <div className="relative">
+                <div className={`grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 transition-opacity ${isRegenerating ? 'opacity-40' : ''}`}>
+                  {displayBullets.map((b, i) => (
+                    <div key={i} className="flex items-start gap-2.5 py-1">
+                      <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${severityDot[b.severity]}`} />
+                      <span className="text-xs leading-relaxed text-foreground">{b.text}</span>
+                    </div>
+                  ))}
+                </div>
+                {isRegenerating && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-card/60 backdrop-blur-[1px] rounded-md pointer-events-none">
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-card border border-border shadow-sm">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                      <span className="text-[11px] font-medium text-foreground">Regenerating with shared model…</span>
+                    </div>
                   </div>
-                ))}
+                )}
+              </div>
+            )}
+
+            {regenerateToast && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mt-2 flex items-center gap-2 text-[11px] text-primary"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>
+                  Bullets regenerated{regenerateToast.deployment ? ` with ${regenerateToast.deployment}` : ''} just now.
+                </span>
               </div>
             )}
           </div>
