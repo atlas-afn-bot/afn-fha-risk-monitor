@@ -1,12 +1,24 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { Sparkles, ChevronDown, ChevronUp, RefreshCw, Loader2, Shield, TrendingDown, BarChart3 } from 'lucide-react';
 import type { DashboardData } from '@/lib/types';
-import { generateAIAnalysis, type AIBullet } from '@/lib/aiAnalysis';
+import type { Snapshot, RiskFactorBullet } from '@/types/snapshot';
+import {
+  generateAIAnalysis,
+  regenerateRiskFactorBullets,
+  type AIBullet,
+} from '@/lib/aiAnalysis';
 import TerminationRiskCards from './TerminationRiskCards';
 
 interface Props {
   data: DashboardData;
   period: string;
+  /**
+   * Full snapshot for the selected period. Optional so historical callers
+   * that only pass `data` still compile — but the baked
+   * `risk_factor_bullets` write-back path (PR B) only lights up when the
+   * snapshot is provided.
+   */
+  snapshot?: Snapshot | null;
 }
 
 const severityDot: Record<string, string> = {
@@ -16,29 +28,67 @@ const severityDot: Record<string, string> = {
   neutral: 'bg-muted-foreground',
 };
 
-const AI_CACHE_PREFIX = 'fha-ai-summary-';
-
-function getCachedBullets(period: string): AIBullet[] | null {
-  try {
-    const raw = localStorage.getItem(`${AI_CACHE_PREFIX}${period}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-  } catch { /* corrupted cache — ignore */ }
-  return null;
+// `RiskFactorBullet` from the snapshot and `AIBullet` from the legacy
+// on-demand path are shape-compatible (same fields, same severity enum).
+// This adapter is a compile-time-safe identity cast at the boundary — no
+// third type gets introduced.
+function bakedToAIBullets(bullets: RiskFactorBullet[]): AIBullet[] {
+  return bullets as AIBullet[];
 }
 
-function setCachedBullets(period: string, bullets: AIBullet[]): void {
-  try {
-    localStorage.setItem(`${AI_CACHE_PREFIX}${period}`, JSON.stringify(bullets));
-  } catch { /* storage full — ignore */ }
+/**
+ * Render a short relative-time caption like "generated 3 hours ago" or
+ * "regenerated 4 days ago". Falls back to the ISO date if the timestamp
+ * can't be parsed. Zero external deps.
+ */
+function formatRelative(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const deltaSec = Math.max(1, Math.round((Date.now() - t) / 1000));
+  if (deltaSec < 60) return `${deltaSec} seconds ago`;
+  const deltaMin = Math.round(deltaSec / 60);
+  if (deltaMin < 60) return `${deltaMin} minute${deltaMin === 1 ? '' : 's'} ago`;
+  const deltaHr = Math.round(deltaMin / 60);
+  if (deltaHr < 24) return `${deltaHr} hour${deltaHr === 1 ? '' : 's'} ago`;
+  const deltaDay = Math.round(deltaHr / 24);
+  if (deltaDay < 30) return `${deltaDay} day${deltaDay === 1 ? '' : 's'} ago`;
+  const deltaMon = Math.round(deltaDay / 30);
+  if (deltaMon < 12) return `${deltaMon} month${deltaMon === 1 ? '' : 's'} ago`;
+  const deltaYr = Math.round(deltaMon / 12);
+  return `${deltaYr} year${deltaYr === 1 ? '' : 's'} ago`;
 }
 
-export default function ExecutiveSummary({ data, period }: Props) {
+export default function ExecutiveSummary({ data, period, snapshot }: Props) {
   const [expanded, setExpanded] = useState(true);
-  const [aiBullets, setAiBullets] = useState<AIBullet[] | null>(() => getCachedBullets(period));
+
+  // ── Baked-vs-on-demand state ────────────────────────────────────────────
+  // Baked bullets from `snapshot.risk_factor_bullets` are the preferred
+  // source. If they're missing (historical snapshots Feb–May 2026) the
+  // component falls back to the legacy `runAI()` on-demand path so the
+  // user still has an escape hatch to fill the empty state manually.
+  const bakedFromSnapshot = useMemo<AIBullet[] | null>(() => {
+    const rfb = snapshot?.risk_factor_bullets;
+    if (!rfb || !Array.isArray(rfb.bullets) || rfb.bullets.length === 0) {
+      return null;
+    }
+    return bakedToAIBullets(rfb.bullets);
+  }, [snapshot]);
+
+  const [aiBullets, setAiBullets] = useState<AIBullet[] | null>(bakedFromSnapshot);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // Provenance for the caption (baked or regenerated), driven by whichever
+  // is more recent in the snapshot. Updated locally after a successful
+  // regenerate so the UI reflects the fresh timestamp without a full
+  // snapshot reload.
+  const [caption, setCaption] = useState<{ label: 'generated' | 'regenerated'; at: string } | null>(() => {
+    const rfb = snapshot?.risk_factor_bullets;
+    if (!rfb) return null;
+    if (rfb.regenerated_at) return { label: 'regenerated', at: rfb.regenerated_at };
+    if (rfb.generated_at) return { label: 'generated', at: rfb.generated_at };
+    return null;
+  });
 
   const termOffices = useMemo(() =>
     data.offices.filter(o => o.totalCR > 200 && o.totalLoans > 100).sort((a, b) => b.totalCR - a.totalCR),
@@ -54,38 +104,68 @@ export default function ExecutiveSummary({ data, period }: Props) {
 
   const displayBullets = aiBullets ?? [];
 
+  // Manual escape hatch for historical snapshots that don't carry the
+  // baked field — same generic /api/ai-analysis call as before.
   const runAI = useCallback(async () => {
     setAiLoading(true);
     setAiError(null);
     try {
       const result = await generateAIAnalysis(data);
       setAiBullets(result.executiveSummary);
-      setCachedBullets(period, result.executiveSummary);
-    } catch (e: any) {
+      // On-demand generation is transient — do NOT persist. The caption
+      // stays cleared so we don't imply the bullets came from the snapshot.
+      setCaption(null);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'AI analysis failed';
       console.error('AI analysis failed:', e);
-      setAiError(e.message || 'AI analysis failed');
+      setAiError(msg);
     } finally {
       setAiLoading(false);
     }
-  }, [data, period]);
+  }, [data]);
 
-  // When the period/data changes, try to load from cache first
+  // Regenerate = write-back path. Only meaningful when a snapshot is
+  // present — falls back to the on-demand runAI() otherwise so
+  // historical periods still have a "Regenerate" affordance that works.
+  const regenerate = useCallback(async () => {
+    if (!snapshot) {
+      // No snapshot → no blob to write back to → generic proxy path.
+      await runAI();
+      return;
+    }
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const resp = await regenerateRiskFactorBullets(period, data);
+      setAiBullets(resp.bullets);
+      setCaption({ label: 'regenerated', at: resp.regenerated_at });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'AI regenerate failed';
+      console.error('Regenerate failed:', e);
+      setAiError(msg);
+      // Preserve the previously-rendered bullets on failure so the user
+      // doesn't lose what they were looking at.
+    } finally {
+      setAiLoading(false);
+    }
+  }, [snapshot, period, data, runAI]);
+
+  // When the period or snapshot changes, resync from the baked field.
+  // No auto-fire of the on-demand LLM anymore — historical empty state
+  // shows the "Click Enhance with AI" affordance and waits for the user.
   useEffect(() => {
-    const cached = getCachedBullets(period);
-    if (cached) {
-      setAiBullets(cached);
-      setAiError(null);
+    setAiBullets(bakedFromSnapshot);
+    setAiError(null);
+    setAiLoading(false);
+    const rfb = snapshot?.risk_factor_bullets;
+    if (rfb?.regenerated_at) {
+      setCaption({ label: 'regenerated', at: rfb.regenerated_at });
+    } else if (rfb?.generated_at) {
+      setCaption({ label: 'generated', at: rfb.generated_at });
     } else {
-      setAiBullets(null);
-      setAiError(null);
+      setCaption(null);
     }
-  }, [data, period]);
-
-  useEffect(() => {
-    if (!aiBullets && !aiLoading && !aiError) {
-      runAI();
-    }
-  }, [aiBullets, aiLoading, aiError, runAI]);
+  }, [bakedFromSnapshot, snapshot, period]);
 
   const dpaConc = data.dpaPortfolioConc;
   const { standardDQ, dpaDQ } = data.programComposition;
@@ -93,6 +173,8 @@ export default function ExecutiveSummary({ data, period }: Props) {
   const wsConc = data.wsSummary.dpaConc;
   const rConc = data.retailSummary.dpaConc;
   const concMultiplier = rConc > 0 ? (wsConc / rConc).toFixed(1) : 'N/A';
+
+  const hasBullets = displayBullets.length > 0;
 
   return (
     <div className="bg-card rounded-lg border border-border">
@@ -103,7 +185,7 @@ export default function ExecutiveSummary({ data, period }: Props) {
         <div className="flex items-center gap-2.5">
           <Sparkles className="w-4 h-4 text-risk-yellow flex-shrink-0" />
           <span className="font-semibold text-sm text-foreground">Executive Summary for Committee Review</span>
-          {aiBullets && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">AI</span>}
+          {hasBullets && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">AI</span>}
           {aiLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
         </div>
         {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
@@ -143,7 +225,7 @@ export default function ExecutiveSummary({ data, period }: Props) {
             </div>
           </div>
 
-          {/* ── Section 3: Risk Factor Trends (AI or fallback) ── */}
+          {/* ── Section 3: Risk Factor Trends (baked → regenerate → empty) ── */}
           <div
             className="cursor-pointer rounded-lg transition-colors hover:bg-muted/40 -mx-2 px-2 py-1 group"
             onClick={(e) => {
@@ -155,38 +237,41 @@ export default function ExecutiveSummary({ data, period }: Props) {
             title="Click to jump to Risk Factor charts"
           >
             <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <BarChart3 className="w-4 h-4 text-primary" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-primary">
                   Portfolio Risk Factors
                 </h3>
-                {aiBullets && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">AI</span>}
+                {hasBullets && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">AI</span>}
+                {hasBullets && caption && (
+                  <span
+                    className="text-[10px] text-muted-foreground"
+                    title={caption.at}
+                  >
+                    {caption.label} {formatRelative(caption.at)}
+                  </span>
+                )}
                 <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">↓ Jump to charts</span>
               </div>
               <div className="flex items-center gap-2">
                 {aiError && <span className="text-[10px] text-risk-red">AI unavailable</span>}
-                {aiBullets && (
-                  <button onClick={() => { setAiBullets(null); }} className="text-[10px] text-muted-foreground hover:text-foreground">
-                    Show template
-                  </button>
-                )}
                 <button
-                  onClick={runAI}
+                  onClick={hasBullets ? regenerate : runAI}
                   disabled={aiLoading}
                   className="flex items-center gap-1 text-[10px] text-primary hover:text-primary/80 disabled:opacity-40"
                 >
                   <RefreshCw className={`w-3 h-3 ${aiLoading ? 'animate-spin' : ''}`} />
-                  {aiBullets ? 'Regenerate' : aiLoading ? 'Analyzing...' : 'Enhance with AI'}
+                  {aiLoading ? 'Analyzing...' : hasBullets ? 'Regenerate' : 'Enhance with AI'}
                 </button>
               </div>
             </div>
 
-            {aiLoading && displayBullets.length === 0 ? (
+            {aiLoading && !hasBullets ? (
               <div className="flex items-center justify-center py-6 gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">Analyzing portfolio risk factors...</span>
               </div>
-            ) : displayBullets.length === 0 && !aiLoading ? (
+            ) : !hasBullets ? (
               <div className="flex items-center justify-center py-6">
                 <span className="text-xs text-muted-foreground">Click "Enhance with AI" to generate risk factor analysis</span>
               </div>
