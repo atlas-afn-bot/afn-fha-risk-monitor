@@ -4,8 +4,9 @@
  * Covers:
  *   1. Baked `snapshot.risk_factor_bullets` renders immediately without any
  *      network call.
- *   2. Missing/empty baked field → empty-state prompt + no auto-fire of the
- *      on-demand LLM path.
+ *   2. Missing/empty baked field → auto-fires `/api/ai-analysis` on mount so
+ *      historical (pre-bake) months still render committee-visible AI
+ *      narrative without the user having to click "Enhance with AI".
  *   3. Clicking "Regenerate" POSTs to `/api/regenerate-risk-factor-bullets`
  *      and re-renders with the returned bullets.
  */
@@ -113,15 +114,43 @@ describe('ExecutiveSummary — PR B baked/regenerate wiring', () => {
     expect(screen.getByText(/^generated /)).toBeInTheDocument();
   });
 
-  it('shows empty state and does NOT auto-call LLM when baked field is missing', async () => {
+  it('auto-fires /api/ai-analysis on mount for historical snapshots without baked bullets', async () => {
+    // Historical (pre-bake) months carry no `risk_factor_bullets`.
     const snapshot = makeSnapshot(undefined as unknown as Snapshot['risk_factor_bullets']);
+
+    // Stub the on-demand proxy so the auto-fire lands successfully.
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  executiveSummary: [
+                    { text: 'Historical bullet from auto-fetch.', severity: 'yellow' },
+                  ],
+                  actionItems: [],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
     render(<ExecutiveSummary data={makeData()} period="2026-05" snapshot={snapshot} />);
-    expect(
-      screen.getByText(/Click "Enhance with AI" to generate risk factor analysis/i),
-    ).toBeInTheDocument();
-    // Give the effect queue a tick — nothing should fire.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(fetchMock).not.toHaveBeenCalled();
+
+    // The empty-state copy should NOT stick around — the auto-fire should
+    // resolve into the historical bullet.
+    await waitFor(() => {
+      expect(screen.getByText(/Historical bullet from auto-fetch/i)).toBeInTheDocument();
+    });
+
+    // Confirm we hit the generic proxy, not the write-back endpoint.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl] = fetchMock.mock.calls[0];
+    expect(String(calledUrl)).toMatch(/\/api\/ai-analysis$/);
   });
 
   it('regenerate button POSTs to /api/regenerate-risk-factor-bullets and re-renders', async () => {

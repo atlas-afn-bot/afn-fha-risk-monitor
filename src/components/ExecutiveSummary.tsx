@@ -165,8 +165,13 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
   }, [snapshot, period, data, runAI]);
 
   // When the period or snapshot changes, resync from the baked field.
-  // No auto-fire of the on-demand LLM anymore — historical empty state
-  // shows the "Click Enhance with AI" affordance and waits for the user.
+  //
+  // Historical snapshots (pre-bake era, e.g. 2026-02 through 2026-04) don't
+  // carry `risk_factor_bullets` at all. Before the bake existed, the card
+  // auto-fetched on mount so committee readers saw AI narrative on every
+  // month. Preserve that behavior for pre-bake months by auto-firing
+  // `runAI()` when the baked field is absent — the on-demand fetch is
+  // transient (not written back) so it just visually restores the old UX.
   useEffect(() => {
     setAiBullets(bakedFromSnapshot);
     setAiError(null);
@@ -182,6 +187,26 @@ export default function ExecutiveSummary({ data, period, snapshot }: Props) {
       setCaption(null);
     }
   }, [bakedFromSnapshot, snapshot, period]);
+
+  // Historical auto-fetch: when a snapshot is loaded but has no baked
+  // bullets, kick off `/api/ai-analysis` in the background so pre-bake
+  // periods (Feb–Apr 2026) render committee-visible AI narrative without
+  // the user having to click "Enhance with AI". Deliberately guarded so it
+  // fires exactly once per (period, snapshot) tuple. Does NOT run when the
+  // baked field is present, an error has already been recorded, a regenerate
+  // is in flight, or a fetch is already loading.
+  useEffect(() => {
+    if (!snapshot) return;
+    if (snapshot.risk_factor_bullets?.bullets?.length) return;
+    if (aiBullets && aiBullets.length > 0) return;
+    if (aiLoading || isRegenerating) return;
+    if (aiError) return;
+    void runAI();
+    // Intentionally omit runAI from deps — runAI's identity changes only
+    // with `data`, and `data` change already triggers the resync effect
+    // above which clears aiBullets and lets this effect re-fire cleanly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, period]);
 
   // Auto-clear the "just regenerated" toast after ~5s so it doesn't stick
   // forever. The persistent caption below the bullets already carries the
