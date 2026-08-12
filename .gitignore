@@ -4,8 +4,11 @@ dist/
 *.local
 
 # Raw source Excel files — customer data, never commit
-# Snapshots (JSON) under public/data/snapshots/ ARE committed so the deployed
-# dashboard has data; the raw xlsx exports that feed the build script are not.
+# Snapshot JSON files live in blob storage (stafnfhauploads/snapshots/); the SWA
+# reads them via /api/snapshot/*. The raw xlsx exports that feed the build script
+# are not committed either. `scripts/build-snapshot.py` can still write to
+# public/data/snapshots/ locally for dev, but those outputs are gitignored below
+# so nothing checks in accidentally.
 data/source/**/*.xlsx
 data/source/**/*.xlsb
 data/source/**/*.xls
@@ -16,6 +19,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Local snapshot builds — kept out of the repo now that prod reads from blob.
+# `scripts/build-snapshot.py` still writes here by default for local iteration,
+# but the deployed site no longer bundles anything under public/data/snapshots/.
+public/data/snapshots/
 
 
 # Scratch / agent working files

@@ -296,7 +296,7 @@ export default function Index() {
                   <h3 className="text-sm font-semibold text-risk-red mb-1">Snapshot load failed</h3>
                   <p className="text-xs text-foreground/80">{error}</p>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Check that <code className="text-[11px] bg-muted px-1 rounded">public/data/snapshots/index.json</code> exists and contains at least one period.
+                    The dashboard fetches from <code className="text-[11px] bg-muted px-1 rounded">/api/snapshot/index</code> and <code className="text-[11px] bg-muted px-1 rounded">/api/snapshot/&#123;period&#125;</code>, which serve blobs from the <code className="text-[11px] bg-muted px-1 rounded">stafnfhauploads/snapshots/</code> container. If this persists, check the SWA logs and confirm <code className="text-[11px] bg-muted px-1 rounded">UPLOADS_STORAGE_CONNECTION</code> is set.
                   </p>
                 </div>
               </div>
