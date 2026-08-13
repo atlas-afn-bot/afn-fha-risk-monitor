@@ -98,6 +98,8 @@ const offices: OfficeSummary[] = [
 
 function makeLoan(office: string, dq: boolean, extra: Partial<ParsedLoan> = {}): ParsedLoan {
   return {
+    LoanNumber: '',
+    FHACaseNumber: null,
     DQ: dq ? '60' : '0',
     HUDOffice: office,
     HUDOfficeCR: 100,
@@ -120,6 +122,8 @@ function makeLoan(office: string, dq: boolean, extra: Partial<ParsedLoan> = {}):
     ReservesGroup: '',
     RiskIndicatorCount: 0,
     GiftGrantGroup: '',
+    HasManualUW: false,
+    HasGiftGrant: false,
     isDelinquent: dq,
     programType: 'Standard',
     channelType: 'Retail',
@@ -132,10 +136,37 @@ function makeLoan(office: string, dq: boolean, extra: Partial<ParsedLoan> = {}):
 }
 
 const loans: ParsedLoan[] = [
-  makeLoan('Charleston', true, { DPAProgram: 'Boost', isBoost: true, isDPA: true, FICO: 590, channelType: 'Wholesale' }),
-  makeLoan('Charleston', true, { DPAProgram: 'Non-DPA', FICO: 650 }),
+  makeLoan('Charleston', true, {
+    LoanNumber: '91240030846',
+    FHACaseNumber: '013-0390395',
+    DPAProgram: 'Boost',
+    isBoost: true,
+    isDPA: true,
+    FICO: 590,
+    channelType: 'Wholesale',
+    LTVGroup: '95-97',
+    ReserveMonths: 0,
+    HasManualUW: true,
+  }),
+  makeLoan('Charleston', true, {
+    LoanNumber: '90550022649',
+    FHACaseNumber: '013-0487430',
+    DPAProgram: 'Non-DPA',
+    FICO: 650,
+    channelType: 'Wholesale',
+    LTVGroup: '95-97',
+    ReserveMonths: 0,
+    HasGiftGrant: true,
+  }),
   makeLoan('Charleston', false),
-  makeLoan('Newark', true, { DPAProgram: 'Boost', isBoost: true, isDPA: true, FICO: 620 }),
+  makeLoan('Newark', true, {
+    LoanNumber: '77123456789',
+    FHACaseNumber: null,
+    DPAProgram: 'Boost',
+    isBoost: true,
+    isDPA: true,
+    FICO: 620,
+  }),
   makeLoan('Denver', false),
 ];
 
@@ -348,27 +379,79 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     expect(within(dqTable).getByText('Non-DPA')).toBeTruthy();
   });
 
-  it('DQ expand header uses "Row" (not "Loan #") since no real loan-number exists', () => {
+  // ── PR-D.2 issue 2 — real loan numbers + FHA case tooltip ────────
+
+  it('DQ expand header is "Loan #" (issue 2)', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     fireEvent.click(screen.getByTestId('office-row-Charleston'));
-    const header = screen.getByTestId('dq-loan-row-header');
-    expect(header.textContent?.trim()).toBe('Row');
-    // Ensure we did not leave the old fake-loan-number label anywhere.
-    const table = screen.getByTestId('dq-loan-table');
-    expect(table.textContent).not.toContain('Loan #');
+    const header = screen.getByTestId('dq-loan-loannumber-header');
+    expect(header.textContent?.trim()).toBe('Loan #');
+    // Old "Row" header should be gone — both the testid and the label.
+    expect(screen.queryByTestId('dq-loan-row-header')).toBeNull();
   });
 
-  it('DQ expand row cells carry an aria-label describing the row', () => {
+  it('DQ expand table renders real Encompass loan numbers (issue 2)', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     fireEvent.click(screen.getByTestId('office-row-Charleston'));
     const dqTable = screen.getByTestId('dq-loan-table');
-    const rows = within(dqTable).getAllByRole('row');
-    // First body row = Boost Wholesale FICO 590.
-    const firstCells = within(rows[1]).getAllByRole('cell');
-    const label = firstCells[0].getAttribute('aria-label') || '';
-    expect(label).toContain('Row 1');
+    // Both Charleston DQ loans have LoanNumber populated in the fixture.
+    expect(within(dqTable).getByText('91240030846')).toBeTruthy();
+    expect(within(dqTable).getByText('90550022649')).toBeTruthy();
+    // Loan-number cell is font-mono.
+    const cell = screen.getByTestId('dq-loan-loannumber-cell-0');
+    expect(cell.className).toMatch(/font-mono/);
+  });
+
+  it('DQ expand table renders em-dash when LoanNumber is missing (issue 2)', () => {
+    // Ad-hoc fixture with a loan missing LoanNumber.
+    const officesLocal = [makeOffice('TinyOffice', { totalCR: 250, totalLoans: 5, totalDLQ: 1 })];
+    const loansLocal = [
+      makeLoan('TinyOffice', true, { LoanNumber: '' }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-TinyOffice'));
+    const cell = screen.getByTestId('dq-loan-loannumber-cell-0');
+    expect(cell.textContent?.trim()).toBe('\u2014');
+  });
+
+  it('DQ expand loan-number cell carries a title tooltip with the FHA case number (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const cell = screen.getByTestId('dq-loan-loannumber-cell-0');
+    // First DQ loan: FHACaseNumber = '013-0390395'.
+    expect(cell.getAttribute('title')).toBe('FHA case 013-0390395');
+  });
+
+  it('DQ expand loan-number cell omits title when FHA case number is null (issue 2)', () => {
+    // Newark's DQ loan has FHACaseNumber: null.
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Newark'));
+    const cell = screen.getByTestId('dq-loan-loannumber-cell-0');
+    expect(cell.getAttribute('title')).toBeNull();
+  });
+
+  it('DQ expand aria-label includes the real loan number (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const cell = screen.getByTestId('dq-loan-loannumber-cell-0');
+    const label = cell.getAttribute('aria-label') || '';
+    expect(label).toContain('Loan 91240030846');
     expect(label).toContain('Wholesale');
     expect(label).toContain('FICO 590');
+  });
+
+  // ── PR-D.2 issue 3 — Status column dropped from DQ table ────────
+
+  it('DQ expand table no longer renders a Status column (issue 3)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const dqTable = screen.getByTestId('dq-loan-table');
+    const headerRow = within(dqTable).getAllByRole('row')[0];
+    const headerCells = within(headerRow).getAllByRole('columnheader');
+    // 7 columns: Loan# | Channel | DPA | FICO | DTI | LTV | Reserves.
+    expect(headerCells).toHaveLength(7);
+    const headers = headerCells.map(h => h.textContent?.trim());
+    expect(headers).not.toContain('Status');
   });
 
   it('shows "no delinquent loans" empty state when an office has none', () => {
@@ -531,5 +614,140 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     // Sort still active.
     expect(screen.getByTestId('leaf-header-name').textContent).toMatch(/▲/);
+  });
+
+  // ── PR-D.2 issue 1 — alternating row shading ──────────────────
+
+  it('office rows carry alternating shading (bg-muted/20 on odd office indices)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // Default sort order: Charleston (0), Newark (1), Denver (2),
+    // Boston (3), Anchorage (4). Odd indices should be shaded.
+    const secondOfficeRow = screen.getByTestId('office-row-Newark');
+    expect(secondOfficeRow.className).toMatch(/bg-muted\/20/);
+    // The Tailwind `even:` selector class is present on every office
+    // row too (see comment in renderRow — kept for future-proofing).
+    expect(secondOfficeRow.className).toMatch(/even:/);
+    // First office row (0) should NOT carry the shade class directly
+    // (it still has `even:bg-muted/20` in the class string, but no
+    // resolved bg on its own).
+    const firstOfficeRow = screen.getByTestId('office-row-Charleston');
+    // Split-and-check to ensure the shade token isn't present as a
+    // stand-alone (only as part of the `even:` prefix).
+    const tokens = firstOfficeRow.className.split(/\s+/);
+    expect(tokens).not.toContain('bg-muted/20');
+    // Portfolio row keeps its distinct bold-header background, not
+    // the alternating shade.
+    const portfolio = screen.getByTestId('portfolio-row');
+    expect(portfolio.className).toMatch(/bg-muted\/70/);
+    expect(portfolio.className).not.toMatch(/even:/);
+  });
+
+  // ── PR-D.2 issue 4 — trends summary section above DQ table ──────
+
+  it('trends summary renders above the delinquent loans table (issue 4)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const summary = screen.getByTestId('trends-summary-Charleston');
+    const table = screen.getByTestId('dq-loan-table');
+    // Summary should appear before the DQ loan table in the DOM.
+    const rel = summary.compareDocumentPosition(table);
+    expect(rel & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('risk-factor concentration list surfaces top items by pct desc (issue 4)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    // Charleston fixture: 2 DQ loans, both Wholesale (100%), both
+    // LTV 95-97 (100%), both Reserves 0 (100%), one Boost DPA (50%),
+    // one Non-DPA (50%), one FICO<620 (50%), etc. Top 3 by pct desc
+    // will all be 100% concentrations.
+    const list = screen.getByTestId('trends-factors-Charleston');
+    const items = within(list).getAllByRole('listitem');
+    expect(items).toHaveLength(3);
+    // The first item should carry the risk-red class (>= 60%).
+    expect(items[0].className).toMatch(/text-risk-red/);
+    // All three items should show a 100% concentration in this fixture.
+    for (const item of items) {
+      expect(item.textContent).toMatch(/2\/2 \(100%\)/);
+    }
+  });
+
+  it('risk-factor concentration list excludes items below 30% (issue 4)', () => {
+    // Craft a fixture where the only above-threshold factors are two.
+    // 10 DQ loans, all Retail (100%), 2 Boost (20%), 3 FICO<620 (30%).
+    const officesLocal = [makeOffice('X', { totalCR: 250, totalLoans: 50, totalDLQ: 10 })];
+    const loansLocal: ParsedLoan[] = [];
+    for (let i = 0; i < 10; i++) {
+      const boost = i < 2;
+      const lowFico = i < 3;
+      loansLocal.push(
+        makeLoan('X', true, {
+          LoanNumber: `L${i}`,
+          channelType: 'Retail',
+          FICO: lowFico ? 610 : 700,
+          isBoost: boost,
+          isDPA: boost,
+          DPAProgram: boost ? 'Boost' : 'Non-DPA',
+          LTVGroup: '85-95',
+          ReserveMonths: 2,
+        }),
+      );
+    }
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-X'));
+    const list = screen.getByTestId('trends-factors-X');
+    const items = within(list).getAllByRole('listitem');
+    // Retail (100%) and FICO<620 (30%) qualify; Boost (20%) does not.
+    // Non-DPA is 80% too. Top 3 desc: Retail 100%, Non-DPA 80%, FICO<620 30% —
+    // Boost 20% must not appear.
+    const labels = items.map(i => i.textContent);
+    expect(labels.some(l => l?.includes('Retail'))).toBe(true);
+    expect(labels.some(l => l?.includes('Boost DPA'))).toBe(false);
+  });
+
+  it('DPA program mix bar renders segments with widths matching data (issue 4)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    // Charleston: 2 DQ loans = 1 Boost (50%), 1 Non-DPA (50%).
+    const boost = screen.getByTestId('trends-dpa-boost-Charleston');
+    expect(boost.style.width).toBe('50%');
+    const nondpa = screen.getByTestId('trends-dpa-nondpa-Charleston');
+    expect(nondpa.style.width).toBe('50%');
+    // No Other DPA loans — segment should not render.
+    expect(screen.queryByTestId('trends-dpa-other-Charleston')).toBeNull();
+  });
+
+  it('channel mix bar renders two segments for mixed channels (issue 4)', () => {
+    // Ad-hoc: 4 DQ loans, 3 Retail + 1 Wholesale.
+    const officesLocal = [makeOffice('MixCity', { totalCR: 220, totalLoans: 20, totalDLQ: 4 })];
+    const loansLocal = [
+      makeLoan('MixCity', true, { LoanNumber: '1', channelType: 'Retail' }),
+      makeLoan('MixCity', true, { LoanNumber: '2', channelType: 'Retail' }),
+      makeLoan('MixCity', true, { LoanNumber: '3', channelType: 'Retail' }),
+      makeLoan('MixCity', true, { LoanNumber: '4', channelType: 'Wholesale' }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-MixCity'));
+    const retail = screen.getByTestId('trends-channel-retail-MixCity');
+    expect(retail.style.width).toBe('75%');
+    const wholesale = screen.getByTestId('trends-channel-wholesale-MixCity');
+    expect(wholesale.style.width).toBe('25%');
+  });
+
+  it('MoM CR delta block is not rendered (per-office history unavailable) (issue 4)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    // We omit the MoM CR block entirely per the brief; assert no
+    // element carries the reserved testid.
+    expect(screen.queryByTestId('trends-mom-cr-Charleston')).toBeNull();
+  });
+
+  it('trends summary is not rendered when the office has zero DQ loans (issue 4)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Anchorage'));
+    expect(screen.queryByTestId('trends-summary-Anchorage')).toBeNull();
+    // Empty-state string still surfaces.
+    const expand = screen.getByTestId('expand-row-Anchorage');
+    expect(expand.textContent).toContain('No delinquent loans');
   });
 });

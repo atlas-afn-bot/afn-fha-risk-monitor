@@ -1,4 +1,8 @@
 export interface LoanRecord {
+  /** Encompass loan number, e.g. "91240030846" — 11 digits. */
+  LoanNumber: string;
+  /** HUD-assigned FHA case number, e.g. "013-0390395". Nullable — not every loan has one assigned yet. */
+  FHACaseNumber: string | null;
   DQ: string;
   HUDOffice: string;
   HUDOfficeCR: number;
@@ -40,6 +44,10 @@ export interface LoanRecord {
   ReservesGroup: string;
   RiskIndicatorCount: number;
   GiftGrantGroup: string;
+  /** Loan was underwritten manually (baked from snapshot's has_manual_uw flag). */
+  HasManualUW: boolean;
+  /** Loan used gift or grant funds (baked from snapshot's has_gift_grant flag). */
+  HasGiftGrant: boolean;
 }
 
 export type ProgramType = 'DPA' | 'Standard';

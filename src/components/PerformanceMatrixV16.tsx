@@ -1,5 +1,19 @@
 /**
- * PerformanceMatrixV16 — PR-D unified matrix, PR-D.1 polish pass.
+ * PerformanceMatrixV16 — PR-D unified matrix, PR-D.1 polish + PR-D.2 round-2.
+ *
+ * PR-D.2 additions (Michael's follow-up review on dev):
+ *   • Alternating office-row shading (bg-muted/20 on odd office
+ *     indices) — the per-tbody layout means Tailwind's `even:` selector
+ *     wouldn't fire naturally, so we apply the shade via an index prop.
+ *   • Real Encompass loan numbers in the DQ expand table (LoanNumber
+ *     preserved on LoanRecord; FHA case number surfaces via a title
+ *     tooltip on the loan-number cell).
+ *   • Status column dropped from the DQ table — every row was "Yes".
+ *   • Trends summary section rendered above the DQ loan table with
+ *     risk-factor concentrations, DPA mix bar, and channel mix bar.
+ *     MoM CR delta is intentionally omitted because per-office CR
+ *     history isn't in the snapshot; the brief says omit rather than
+ *     fake it.
  *
  * Michael rejected the PR-B layout in review with a hard requirement:
  *
@@ -92,6 +106,102 @@ type SortKey =
   | 'wsDPAConc'
   | 'status'
   | 'notes';
+
+// ── Trends summary for the DQ expand section (PR-D.2 issue 4) ─────────
+
+interface RiskFactor {
+  count: number;
+  total: number;
+  pct: number;
+  label: string;
+}
+
+interface TrendsSummary {
+  total: number;
+  factors: RiskFactor[];
+  dpaMix: { boost: number; otherDPA: number; nonDPA: number };
+  channelMix: { retail: number; wholesale: number };
+}
+
+/**
+ * Compute the trends summary for one office's DQ loans.
+ *
+ * Risk factors are computed across the fixed set of dimensions the
+ * committee cares about; the top 3 by concentration percentage are
+ * surfaced (below 30% is not signal and gets filtered out).
+ *
+ * DPA-program mix and channel mix are always computed (three-way and
+ * two-way splits respectively) — they render as stacked bars.
+ */
+function computeTrendsSummary(dqLoans: ParsedLoan[]): TrendsSummary {
+  const total = dqLoans.length;
+  if (total === 0) {
+    return {
+      total: 0,
+      factors: [],
+      dpaMix: { boost: 0, otherDPA: 0, nonDPA: 0 },
+      channelMix: { retail: 0, wholesale: 0 },
+    };
+  }
+
+  // Buckets to consider — each returns {label, count}.
+  const buckets: Array<{ label: string; count: number }> = [
+    { label: 'Wholesale', count: dqLoans.filter(l => l.channelType === 'Wholesale').length },
+    { label: 'Retail', count: dqLoans.filter(l => l.channelType === 'Retail').length },
+    { label: 'Boost DPA', count: dqLoans.filter(l => l.isBoost).length },
+    { label: 'Non-DPA', count: dqLoans.filter(l => !l.isDPA).length },
+    { label: 'Other DPA', count: dqLoans.filter(l => l.isDPA && !l.isBoost).length },
+    { label: 'FICO < 620', count: dqLoans.filter(l => l.FICO > 0 && l.FICO < 620).length },
+    { label: 'FICO < 660', count: dqLoans.filter(l => l.FICO > 0 && l.FICO < 660).length },
+    { label: 'FICO < 700', count: dqLoans.filter(l => l.FICO > 0 && l.FICO < 700).length },
+    { label: 'LTV > 95', count: dqLoans.filter(l => (l.LTVGroup ?? '').includes('95') || (l.LTVGroup ?? '').includes('97') || (l.LTVGroup ?? '').includes('100')).length },
+    { label: 'LTV > 97', count: dqLoans.filter(l => (l.LTVGroup ?? '').includes('97') || (l.LTVGroup ?? '').includes('100')).length },
+    { label: 'Reserves < 1 month', count: dqLoans.filter(l => l.ReserveMonths < 1).length },
+    { label: 'Manual UW', count: dqLoans.filter(l => l.HasManualUW).length },
+    { label: 'Gift / grant funds', count: dqLoans.filter(l => l.HasGiftGrant).length },
+  ];
+
+  const factors: RiskFactor[] = buckets
+    .map(b => ({
+      count: b.count,
+      total,
+      pct: total > 0 ? (b.count / total) * 100 : 0,
+      label: b.label,
+    }))
+    .filter(f => f.pct >= 30)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 3);
+
+  const boost = dqLoans.filter(l => l.isBoost).length;
+  const otherDPA = dqLoans.filter(l => l.isDPA && !l.isBoost).length;
+  const nonDPA = dqLoans.filter(l => !l.isDPA).length;
+  const retail = dqLoans.filter(l => l.channelType === 'Retail').length;
+  const wholesale = dqLoans.filter(l => l.channelType === 'Wholesale').length;
+
+  return {
+    total,
+    factors,
+    dpaMix: {
+      boost: (boost / total) * 100,
+      otherDPA: (otherDPA / total) * 100,
+      nonDPA: (nonDPA / total) * 100,
+    },
+    channelMix: {
+      // Guard against Unknown-channel loans skewing the bar to <100%.
+      // Denominator here is the DQ total so unknowns simply take up the
+      // remaining space silently — acceptable given how rare that case is.
+      retail: (retail / total) * 100,
+      wholesale: (wholesale / total) * 100,
+    },
+  };
+}
+
+/** Threshold coloring for a risk-factor concentration list item. */
+function factorTextClass(pct: number): string {
+  if (pct >= 60) return 'text-risk-red font-semibold';
+  if (pct >= 40) return 'text-risk-yellow';
+  return '';
+}
 
 interface LeafCol {
   key: SortKey;
@@ -425,14 +535,19 @@ function compareDefault(a: DisplayRow, b: DisplayRow): number {
 /**
  * Nested table shown when an office row is expanded. Filters to that
  * office's DQ loans and shows the columns most useful for spotting
- * concentration risk (DPA program column is the whole reason this
- * expand exists — Michael's earlier feedback flagged Boost concentration
- * as the story the committee needs to see one click away).
+ * concentration risk.
  *
- * PR-D.1: header column is "Row" (not "Loan #") since ParsedLoan carries
- * no true loan-number field. Cell values are 1-based row indices; the
- * cell also carries an aria-label describing what the row is (channel +
- * FICO) for screen readers.
+ * PR-D.2 changes:
+ *   • First column is now "Loan #" (real Encompass loan number preserved
+ *     on ParsedLoan.LoanNumber). Renders in font-mono; missing values
+ *     collapse to em-dash rather than throwing.
+ *   • FHA case number rides along as a native `title` tooltip on the
+ *     loan-number cell so hovering surfaces it without eating a whole
+ *     column of horizontal space.
+ *   • The Status column is gone — every row here is delinquent by
+ *     construction, so "Yes" everywhere was zero signal.
+ *   • aria-label on the loan-number cell now includes the real loan
+ *     number so screen-reader announcements match what's on screen.
  */
 function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
   if (loans.length === 0) {
@@ -443,37 +558,161 @@ function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
       <table className="w-full text-xs border-collapse" data-testid="dq-loan-table">
         <thead>
           <tr className="bg-muted/60">
-            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-row-header">Row</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-loannumber-header">Loan #</th>
             <th className="text-left px-2 py-1 border-b">Channel</th>
             <th className="text-left px-2 py-1 border-b">DPA Program</th>
             <th className="text-right px-2 py-1 border-b">FICO</th>
             <th className="text-right px-2 py-1 border-b">DTI</th>
             <th className="text-right px-2 py-1 border-b">LTV</th>
             <th className="text-right px-2 py-1 border-b">Reserves</th>
-            <th className="text-left px-2 py-1 border-b">Status</th>
           </tr>
         </thead>
         <tbody>
           {loans.map((l, i) => {
-            const rowNo = i + 1;
+            const loanNo = l.LoanNumber || '';
+            const displayLoanNo = loanNo || '—';
+            const dpaLabel = l.isBoost ? 'Boost' : l.DPAProgram || 'Non-DPA';
             const aria =
-              `Row ${rowNo} — ${l.channelType} ${l.isBoost ? 'Boost' : l.DPAProgram || 'Non-DPA'}` +
+              `Loan ${loanNo || '(no number)'} — ${l.channelType} ${dpaLabel}` +
               (l.FICO ? ` FICO ${l.FICO}` : '');
+            // Include the FHA case number in the title tooltip when we
+            // have it — hovering the loan number reveals HUD's case ID.
+            const title = l.FHACaseNumber ? `FHA case ${l.FHACaseNumber}` : undefined;
             return (
               <tr key={i} className="hover:bg-muted/20">
-                <td className="px-2 py-1 border-b font-mono" aria-label={aria}>{rowNo}</td>
+                <td
+                  className="px-2 py-1 border-b font-mono"
+                  aria-label={aria}
+                  title={title}
+                  data-testid={`dq-loan-loannumber-cell-${i}`}
+                >
+                  {displayLoanNo}
+                </td>
                 <td className="px-2 py-1 border-b">{l.channelType}</td>
                 <td className="px-2 py-1 border-b">{l.DPAProgram || 'Non-DPA'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.FICO || '—'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.DTIBackEndGroup || '—'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.LTVGroup || '—'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.ReserveMonths ?? '—'}</td>
-                <td className="px-2 py-1 border-b">{l.DQ || '—'}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * PR-D.2 issue 4 — trends summary section rendered above the DQ loan
+ * table when an office row is expanded.
+ *
+ * Layout:
+ *   • responsive two-column grid on md+; single column on narrow.
+ *   • Top-left: risk-factor concentrations (top 3 by pct, floor 30%).
+ *   • Right column reserved for future MoM CR delta (omitted here —
+ *     per-office historical CR is not available in the snapshot; the
+ *     brief explicitly says omit rather than fake it).
+ *   • Full-width row: DPA program mix bar.
+ *   • Full-width row: channel mix bar.
+ */
+function TrendsSummarySection({ summary, officeName }: { summary: TrendsSummary; officeName: string }) {
+  return (
+    <div className="mb-4" data-testid={`trends-summary-${officeName}`}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+        {/* (a) Top risk-factor concentrations. */}
+        <div>
+          <div className="text-xs font-semibold mb-1">Top risk-factor concentrations</div>
+          {summary.factors.length === 0 ? (
+            <div
+              className="text-xs text-muted-foreground italic"
+              data-testid={`trends-factors-empty-${officeName}`}
+            >
+              No single risk factor above 30% concentration.
+            </div>
+          ) : (
+            <ul className="text-xs space-y-0.5" data-testid={`trends-factors-${officeName}`}>
+              {summary.factors.map(f => (
+                <li
+                  key={f.label}
+                  className={factorTextClass(f.pct)}
+                  data-testid={`trends-factor-${officeName}-${f.label}`}
+                >
+                  {f.count}/{f.total} ({Math.round(f.pct)}%) — {f.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {/*
+          (d) MoM CR delta — intentionally omitted. HUDMonthlySnapshot
+          only carries portfolio-level CR history, not per-office CR.
+          Faking it (e.g. using overall CR delta as a proxy) would be
+          misleading, so per the PR-D.2 brief we leave the slot empty.
+          When per-office history becomes available the block goes here.
+        */}
+      </div>
+
+      {/* (b) DPA program mix bar. */}
+      <div className="mb-2" data-testid={`trends-dpa-mix-${officeName}`}>
+        <div className="text-xs font-semibold mb-1">DPA program mix (of DQ loans)</div>
+        <div className="flex h-6 w-full rounded overflow-hidden border border-border text-[10px] leading-6 text-white">
+          {summary.dpaMix.boost > 0 && (
+            <div
+              className="bg-risk-red text-center px-1 truncate"
+              style={{ width: `${summary.dpaMix.boost}%` }}
+              data-testid={`trends-dpa-boost-${officeName}`}
+            >
+              Boost {Math.round(summary.dpaMix.boost)}%
+            </div>
+          )}
+          {summary.dpaMix.otherDPA > 0 && (
+            <div
+              className="bg-risk-yellow text-center px-1 truncate"
+              style={{ width: `${summary.dpaMix.otherDPA}%` }}
+              data-testid={`trends-dpa-other-${officeName}`}
+            >
+              Other DPA {Math.round(summary.dpaMix.otherDPA)}%
+            </div>
+          )}
+          {summary.dpaMix.nonDPA > 0 && (
+            <div
+              className="bg-muted-foreground text-center px-1 truncate"
+              style={{ width: `${summary.dpaMix.nonDPA}%` }}
+              data-testid={`trends-dpa-nondpa-${officeName}`}
+            >
+              Non-DPA {Math.round(summary.dpaMix.nonDPA)}%
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* (c) Channel mix bar. */}
+      <div className="mb-3" data-testid={`trends-channel-mix-${officeName}`}>
+        <div className="text-xs font-semibold mb-1">Channel mix (of DQ loans)</div>
+        <div className="flex h-6 w-full rounded overflow-hidden border border-border text-[10px] leading-6 text-white">
+          {summary.channelMix.retail > 0 && (
+            <div
+              className="bg-risk-blue text-center px-1 truncate"
+              style={{ width: `${summary.channelMix.retail}%` }}
+              data-testid={`trends-channel-retail-${officeName}`}
+            >
+              Retail {Math.round(summary.channelMix.retail)}%
+            </div>
+          )}
+          {summary.channelMix.wholesale > 0 && (
+            <div
+              className="bg-risk-red text-center px-1 truncate"
+              style={{ width: `${summary.channelMix.wholesale}%` }}
+              data-testid={`trends-channel-wholesale-${officeName}`}
+            >
+              Wholesale {Math.round(summary.channelMix.wholesale)}%
+            </div>
+          )}
+        </div>
+      </div>
+
+      <hr className="border-border my-3" />
     </div>
   );
 }
@@ -484,6 +723,12 @@ interface InnerProps {
   portfolioRow: DisplayRow;
   sortedRows: DisplayRow[];
   dqLoansByOffice: Map<string, ParsedLoan[]>;
+  /**
+   * Cached trends summary per office key. Populated lazily as offices
+   * are expanded (same expandedCache invariant — once computed, kept
+   * around for the life of the component).
+   */
+  trendsSummaryByOffice: Map<string, TrendsSummary>;
   sortKey: SortKey | null;
   sortDir: SortDir;
   toggleSort: (k: SortKey) => void;
@@ -506,6 +751,7 @@ function PerformanceMatrixV16Inner(props: InnerProps) {
     portfolioRow,
     sortedRows,
     dqLoansByOffice,
+    trendsSummaryByOffice,
     sortKey,
     sortDir,
     toggleSort,
@@ -523,17 +769,28 @@ function PerformanceMatrixV16Inner(props: InnerProps) {
     return sortDir === 'asc' ? ' ▲' : ' ▼';
   };
 
-  const renderRow = (row: DisplayRow) => {
+  const renderRow = (row: DisplayRow, officeIndex: number) => {
     const isExpanded = !row.isPortfolio && expanded.has(row.key);
     const dqLoans = row.isPortfolio ? [] : dqLoansByOffice.get(row.key) ?? [];
     const wasExpanded = !row.isPortfolio && expandedCache.has(row.key);
+    const trendsSummary = row.isPortfolio ? null : (trendsSummaryByOffice.get(row.key) ?? null);
+    // PR-D.2 issue 1 — alternating row shading. Because each office row
+    // lives in its own <tbody> (so the expand row can splice below
+    // without leaking style), the CSS `:nth-child(even)` / Tailwind
+    // `even:` selector can't fire the way it would in a single <tbody>.
+    // Applying `bg-muted/20` conditionally on the 0-indexed office index
+    // is the semantic equivalent — ~5% contrast on both light and dark
+    // themes (muted with 20% opacity). PORTFOLIO TOTAL keeps its own
+    // bold-header background; expand rows already carry `bg-muted/20`
+    // themselves so no double-shade issue.
+    const evenShadeClass = !row.isPortfolio && officeIndex % 2 === 1 ? 'bg-muted/20' : '';
     return (
       <tbody key={row.key}>
         <tr
           className={
             row.isPortfolio
               ? 'font-bold bg-muted/70'
-              : 'hover:bg-muted/30 cursor-pointer'
+              : `hover:bg-muted/30 cursor-pointer even:bg-muted/20 ${evenShadeClass}`.trim()
           }
           onClick={() => {
             if (!row.isPortfolio) toggleExpand(row.key);
@@ -604,10 +861,23 @@ function PerformanceMatrixV16Inner(props: InnerProps) {
         {isExpanded && (
           <tr data-testid={`expand-row-${row.key}`}>
             <td colSpan={leafCols.length} className="px-4 py-3 bg-muted/20 border-b">
-              <div className="text-xs font-semibold mb-2">
-                Delinquent loans — {row.name} ({dqLoans.length})
-              </div>
-              <DQLoanBreakdown loans={dqLoans} />
+              {dqLoans.length === 0 ? (
+                // Defense in depth: shouldn't be reachable because rows
+                // with DQ=0 aren't the story here, but the office row is
+                // still clickable. Skip the trends section entirely and
+                // just show the empty-state string.
+                <DQLoanBreakdown loans={dqLoans} />
+              ) : (
+                <>
+                  {trendsSummary && (
+                    <TrendsSummarySection summary={trendsSummary} officeName={row.key} />
+                  )}
+                  <div className="text-xs font-semibold mb-2">
+                    Delinquent loans — {row.name} ({dqLoans.length})
+                  </div>
+                  <DQLoanBreakdown loans={dqLoans} />
+                </>
+              )}
               {wasExpanded && (
                 <span data-testid={`cache-marker-${row.key}`} className="hidden" />
               )}
@@ -701,8 +971,8 @@ function PerformanceMatrixV16Inner(props: InnerProps) {
           </thead>
           {/* Portfolio row rendered first — pinned above all sorted
               office rows regardless of sort direction. */}
-          {renderRow(portfolioRow)}
-          {sortedRows.map((r) => renderRow(r))}
+          {renderRow(portfolioRow, -1)}
+          {sortedRows.map((r, i) => renderRow(r, i))}
         </table>
       </div>
       <p className="text-xs text-muted-foreground mt-2">
@@ -758,6 +1028,19 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
     }
     return m;
   }, [loans]);
+
+  // PR-D.2 issue 4: trends summary per office. Same one-pass /
+  // pre-index pattern as dqLoansByOffice — the compute is cheap
+  // (small integer counts across a few thousand loans) and the whole
+  // map lives for the life of the component, so re-expanding a row
+  // doesn't re-run the math.
+  const trendsSummaryByOffice = useMemo(() => {
+    const m = new Map<string, TrendsSummary>();
+    for (const [officeName, dqLoans] of dqLoansByOffice) {
+      m.set(officeName, computeTrendsSummary(dqLoans));
+    }
+    return m;
+  }, [dqLoansByOffice]);
 
   const toggleSort = useCallback((k: SortKey) => {
     // Cycle: none (default) → first-click-direction → flipped → none.
@@ -856,6 +1139,7 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
       portfolioRow={portfolioRow}
       sortedRows={sortedRows}
       dqLoansByOffice={dqLoansByOffice}
+      trendsSummaryByOffice={trendsSummaryByOffice}
       sortKey={sortKey}
       sortDir={sortDir}
       toggleSort={toggleSort}

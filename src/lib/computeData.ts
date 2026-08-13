@@ -94,6 +94,14 @@ function snapshotLoanToParsed(l: SnapshotLoan): ParsedLoan {
     : l.channel === 'Wholesale' ? 'Wholesale'
     : 'Unknown';
   return {
+    // Preserve raw Encompass loan number + HUD-assigned FHA case number so
+    // downstream UI (PR-D.2 DQ expand table) can surface real identifiers
+    // instead of synthetic row numbers. `loan_id` is required in the
+    // snapshot schema; defensively coerce a missing/blank value to '' so a
+    // corrupt row doesn't throw — the pipeline is tolerant of partial data
+    // elsewhere and should stay that way.
+    LoanNumber: l.loan_id ?? '',
+    FHACaseNumber: l.fha_case_number ?? null,
     DQ: l.is_delinquent ? 'Yes' : 'No',
     HUDOffice: l.hud_office ?? '',
     HUDOfficeCR: l.hud_office_compare_ratio ?? 0,
@@ -123,6 +131,8 @@ function snapshotLoanToParsed(l: SnapshotLoan): ParsedLoan {
     ReservesGroup: l.reserves_group ?? 'Unknown',
     RiskIndicatorCount: l.risk_indicator_count,
     GiftGrantGroup: l.gift_grant_group ?? 'Unknown',
+    HasManualUW: l.has_manual_uw ?? false,
+    HasGiftGrant: l.has_gift_grant ?? false,
 
     isDelinquent: l.is_delinquent,
     programType: l.program_type,

@@ -29,6 +29,8 @@ import type { ParsedLoan, HUDOfficeCR } from '../types';
 /** Minimal loan factory — only sets the fields computeOffices reads. */
 function loan(overrides: Partial<ParsedLoan>): ParsedLoan {
   return {
+    LoanNumber: 'TEST-001',
+    FHACaseNumber: null,
     DQ: 'No',
     HUDOffice: 'Dallas',
     HUDOfficeCR: 247,
@@ -51,6 +53,8 @@ function loan(overrides: Partial<ParsedLoan>): ParsedLoan {
     ReservesGroup: 'Unknown',
     RiskIndicatorCount: 0,
     GiftGrantGroup: 'Unknown',
+    HasManualUW: false,
+    HasGiftGrant: false,
     isDelinquent: false,
     programType: 'Standard',
     channelType: 'Retail',
