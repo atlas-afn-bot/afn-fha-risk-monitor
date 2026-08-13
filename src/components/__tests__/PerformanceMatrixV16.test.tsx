@@ -1,7 +1,7 @@
 /**
- * PerformanceMatrixV16 — behavior tests for PR-D.
+ * PerformanceMatrixV16 — behavior tests for PR-D + PR-D.1 polish.
  *
- * Covers the acceptance criteria from the PR-D brief:
+ * Covers the acceptance criteria from the PR-D and PR-D.1 briefs:
  *   1. Renders the two-row grouped header with 26 leaf columns matching
  *      the v16 sheet spec (Office | CR ×3 | Loans ×3 | DQ ×3 |
  *      DLQ Breakdown ×6 | Removed ×2 | Revised CR ×3 | DPA Conc% ×3 |
@@ -9,18 +9,23 @@
  *   2. Renders every office as a row (no cap, no CR-band filter).
  *   3. PORTFOLIO TOTAL row pinned at the top with correct summed
  *      values.
- *   4. Default sort is CR Tot desc.
- *   5. Clicking a leaf header toggles sort direction; PORTFOLIO TOTAL
- *      stays pinned at the top regardless.
+ *   4. Default sort is the two-key canonical bucket (Term Risk →
+ *      Credit Watch → Safe) then CR Tot desc within each bucket.
+ *   5. Clicking a leaf header REPLACES the two-key default; cycling
+ *      through direction → clear returns to the default. PORTFOLIO
+ *      TOTAL stays pinned at the top regardless.
  *   6. Copy button writes TSV to navigator.clipboard.
  *   7. Native <table> structure (root grid is `<table>`, not divs).
  *   8. Null OfficeSummary fields render as em-dash (—), not 0.
  *   9. Row expand: clicking an office renders the DQ-loan table
- *      filtered to that office's delinquent loans.
+ *      filtered to that office's delinquent loans; header column is
+ *      "Row" (not "Loan #") since ParsedLoan has no true loan-number.
  *  10. Collapse + re-expand keeps the "was expanded" cache marker
- *      (proxy for the no-remount contract — see JSDoc in the
- *      component for why we test via cache marker instead of ref
- *      identity).
+ *      (proxy for the no-remount contract).
+ *  11. PR-D.1: risk color coding on Status pill, CR Tot, Revised CR
+ *      Tot, and R/WS Boost DLQ cells.
+ *  12. PR-D.1: sticky thead + Maximize portal + Esc closes + sort
+ *      state persists across maximize toggle.
  *
  * Pure client-side — no /api/evaluate mock needed (unlike PR-B).
  */
@@ -73,10 +78,21 @@ function makeOffice(name: string, o: Partial<OfficeSummary> = {}): OfficeSummary
 }
 
 const offices: OfficeSummary[] = [
-  makeOffice('Charleston', { totalCR: 386, retailCR: 342, wsCR: 447, totalLoans: 400, retailLoans: 250, wsLoans: 150, totalDLQ: 20 }),
-  makeOffice('Newark', { totalCR: 289, retailCR: 270, wsCR: 310, totalLoans: 800, retailLoans: 450, wsLoans: 350, totalDLQ: 40 }),
-  makeOffice('Denver', { totalCR: 205, retailCR: 190, wsCR: 220, totalLoans: 600, retailLoans: 350, wsLoans: 250, totalDLQ: 25 }),
-  // Small office with null wsCR — verifies em-dash rendering.
+  // Charleston: totalCR 386, 400 loans → Term Risk. Boost columns > 0
+  // to exercise the color-coded R/WS Boost DLQ cells.
+  makeOffice('Charleston', { totalCR: 386, retailCR: 342, wsCR: 447, totalLoans: 400, retailLoans: 250, wsLoans: 150, totalDLQ: 20, retailBoostDLQ: 5, wsBoostDLQ: 3, revisedTotalCR: 180 }),
+  // Newark: totalCR 289, 800 loans → Term Risk. Boost columns 0/0 to
+  // exercise the "no color when 0" branch.
+  makeOffice('Newark', { totalCR: 289, retailCR: 270, wsCR: 310, totalLoans: 800, retailLoans: 450, wsLoans: 350, totalDLQ: 40, retailBoostDLQ: 0, wsBoostDLQ: 0, revisedTotalCR: 210 }),
+  // Denver: totalCR 205, 600 loans → Term Risk. Revised CR 160 →
+  // yellow (150 < 160 ≤ 200).
+  makeOffice('Denver', { totalCR: 205, retailCR: 190, wsCR: 220, totalLoans: 600, retailLoans: 350, wsLoans: 250, totalDLQ: 25, retailBoostDLQ: 0, wsBoostDLQ: 0, revisedTotalCR: 160 }),
+  // Boston: totalCR 175, 300 loans → Credit Watch bucket. Sanity-
+  // check for the two-key default sort ordering.
+  makeOffice('Boston', { totalCR: 175, retailCR: 160, wsCR: 195, totalLoans: 300, retailLoans: 200, wsLoans: 100, totalDLQ: 15, revisedTotalCR: 130 }),
+  // Small office with null wsCR and total book size well below Credit
+  // Watch loan-count clause when combined with low CR — verifies em-
+  // dash rendering and the Safe bucket.
   makeOffice('Anchorage', { totalCR: 0, retailCR: null, wsCR: null, totalLoans: 2, retailLoans: 0, wsLoans: 2, totalDLQ: 0, revisedTotalCR: null, revisedRetailCR: null, revisedWSCR: null, retailDPAConc: 0, wsDPAConc: 100, totalDPAConc: 100 }),
 ];
 
@@ -116,7 +132,7 @@ function makeLoan(office: string, dq: boolean, extra: Partial<ParsedLoan> = {}):
 }
 
 const loans: ParsedLoan[] = [
-  makeLoan('Charleston', true, { DPAProgram: 'Boost', isBoost: true, isDPA: true, FICO: 590 }),
+  makeLoan('Charleston', true, { DPAProgram: 'Boost', isBoost: true, isDPA: true, FICO: 590, channelType: 'Wholesale' }),
   makeLoan('Charleston', true, { DPAProgram: 'Non-DPA', FICO: 650 }),
   makeLoan('Charleston', false),
   makeLoan('Newark', true, { DPAProgram: 'Boost', isBoost: true, isDPA: true, FICO: 620 }),
@@ -125,7 +141,7 @@ const loans: ParsedLoan[] = [
 
 // ── Suite ──────────────────────────────────────────────────────────────
 
-describe('PerformanceMatrixV16 — PR-D unified matrix', () => {
+describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
   // Silence noisy React `console.error` from any prop warnings so the
   // Vitest output stays readable. Individual tests still assert on real
   // DOM state, not on console output.
@@ -196,11 +212,11 @@ describe('PerformanceMatrixV16 — PR-D unified matrix', () => {
     // First cell = name column with chevron placeholder — the portfolio
     // row skips the chevron, so text is just the name.
     expect(cells[0].textContent).toContain('PORTFOLIO TOTAL');
-    // Total loans: 400 + 800 + 600 + 2 = 1802.
+    // Total loans: 400 + 800 + 600 + 300 + 2 = 2102.
     // Column index for totalLoans is 4 (0-indexed).
-    expect(cells[4].textContent?.trim()).toBe('1802');
-    // Total DLQ: 20 + 40 + 25 + 0 = 85.
-    expect(cells[7].textContent?.trim()).toBe('85');
+    expect(cells[4].textContent?.trim()).toBe('2102');
+    // Total DLQ: 20 + 40 + 25 + 15 + 0 = 100.
+    expect(cells[7].textContent?.trim()).toBe('100');
     // Notes column carries 'Portfolio-wide'.
     expect(cells[25].textContent?.trim()).toBe('Portfolio-wide');
   });
@@ -212,31 +228,66 @@ describe('PerformanceMatrixV16 — PR-D unified matrix', () => {
     // rows[0] and [1] are the two thead rows; portfolio is [2].
     expect(rows[2].getAttribute('data-testid')).toBe('portfolio-row');
 
-    // Toggle sort by clicking the CR Tot header (default is desc → asc).
+    // Toggle sort by clicking the CR Tot header — that overrides the
+    // two-key default with a column-only sort. Portfolio still pinned.
     fireEvent.click(screen.getByTestId('leaf-header-totalCR'));
     const rowsAfter = screen.getAllByRole('row');
     expect(rowsAfter[2].getAttribute('data-testid')).toBe('portfolio-row');
   });
 
-  it('defaults to CR Tot desc (worst office first below portfolio)', () => {
+  it('default sort is two-key: Term Risk bucket first, then CR Tot desc within bucket', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     const rows = screen.getAllByRole('row');
     // rows: [thead1, thead2, portfolio, sorted...]
-    // Charleston (386) > Newark (289) > Denver (205) > Anchorage (0).
+    // Term Risk offices (Charleston 386, Newark 289, Denver 205) come
+    // before the Credit Watch office (Boston 175) which comes before
+    // the Safe office (Anchorage 0).
     expect(rows[3].getAttribute('data-testid')).toBe('office-row-Charleston');
     expect(rows[4].getAttribute('data-testid')).toBe('office-row-Newark');
     expect(rows[5].getAttribute('data-testid')).toBe('office-row-Denver');
-    expect(rows[6].getAttribute('data-testid')).toBe('office-row-Anchorage');
+    expect(rows[6].getAttribute('data-testid')).toBe('office-row-Boston');
+    expect(rows[7].getAttribute('data-testid')).toBe('office-row-Anchorage');
   });
 
-  it('clicking a leaf header changes sort direction and reorders rows', () => {
+  it('default sort: no leaf header is marked active until user clicks', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
-    // One click on the already-active CR Tot column → flip to asc.
-    fireEvent.click(screen.getByTestId('leaf-header-totalCR'));
+    // With the two-key canonical default, no column header owns the
+    // sort — the caret should be absent.
+    expect(screen.getByTestId('leaf-header-totalCR').textContent).not.toMatch(/[▲▼]/);
+    expect(screen.getByTestId('leaf-header-name').textContent).not.toMatch(/[▲▼]/);
+  });
+
+  it('clicking a leaf header REPLACES the two-key default and reorders rows', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // First click on Office name column → asc alphabetical, ignoring
+    // the two-key bucket.
+    fireEvent.click(screen.getByTestId('leaf-header-name'));
     const rows = screen.getAllByRole('row');
-    // Asc: Anchorage (0) → Denver (205) → Newark (289) → Charleston (386).
+    // Asc alpha: Anchorage → Boston → Charleston → Denver → Newark.
     expect(rows[3].getAttribute('data-testid')).toBe('office-row-Anchorage');
-    expect(rows[6].getAttribute('data-testid')).toBe('office-row-Charleston');
+    expect(rows[4].getAttribute('data-testid')).toBe('office-row-Boston');
+    expect(rows[5].getAttribute('data-testid')).toBe('office-row-Charleston');
+    expect(rows[6].getAttribute('data-testid')).toBe('office-row-Denver');
+    expect(rows[7].getAttribute('data-testid')).toBe('office-row-Newark');
+    // Caret should now show on name.
+    expect(screen.getByTestId('leaf-header-name').textContent).toMatch(/[▲▼]/);
+  });
+
+  it('cycling a column header (asc → desc → clear) returns to two-key default', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // Click totalCR — first click sets desc (numeric default direction).
+    fireEvent.click(screen.getByTestId('leaf-header-totalCR'));
+    expect(screen.getByTestId('leaf-header-totalCR').textContent).toMatch(/▼/);
+    // Second click flips to asc.
+    fireEvent.click(screen.getByTestId('leaf-header-totalCR'));
+    expect(screen.getByTestId('leaf-header-totalCR').textContent).toMatch(/▲/);
+    // Third click clears → two-key default restored.
+    fireEvent.click(screen.getByTestId('leaf-header-totalCR'));
+    expect(screen.getByTestId('leaf-header-totalCR').textContent).not.toMatch(/[▲▼]/);
+    const rows = screen.getAllByRole('row');
+    // Bucket-ordered again.
+    expect(rows[3].getAttribute('data-testid')).toBe('office-row-Charleston');
+    expect(rows[7].getAttribute('data-testid')).toBe('office-row-Anchorage');
   });
 
   it('root grid is a real <table> element (browser-native TSV copy works)', () => {
@@ -297,6 +348,29 @@ describe('PerformanceMatrixV16 — PR-D unified matrix', () => {
     expect(within(dqTable).getByText('Non-DPA')).toBeTruthy();
   });
 
+  it('DQ expand header uses "Row" (not "Loan #") since no real loan-number exists', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const header = screen.getByTestId('dq-loan-row-header');
+    expect(header.textContent?.trim()).toBe('Row');
+    // Ensure we did not leave the old fake-loan-number label anywhere.
+    const table = screen.getByTestId('dq-loan-table');
+    expect(table.textContent).not.toContain('Loan #');
+  });
+
+  it('DQ expand row cells carry an aria-label describing the row', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const dqTable = screen.getByTestId('dq-loan-table');
+    const rows = within(dqTable).getAllByRole('row');
+    // First body row = Boost Wholesale FICO 590.
+    const firstCells = within(rows[1]).getAllByRole('cell');
+    const label = firstCells[0].getAttribute('aria-label') || '';
+    expect(label).toContain('Row 1');
+    expect(label).toContain('Wholesale');
+    expect(label).toContain('FICO 590');
+  });
+
   it('shows "no delinquent loans" empty state when an office has none', () => {
     // Anchorage has no DQ loans in the fixture.
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
@@ -320,14 +394,142 @@ describe('PerformanceMatrixV16 — PR-D unified matrix', () => {
     expect(screen.getByTestId('cache-marker-Charleston')).toBeTruthy();
   });
 
-  it('sort caret only appears on the active column', () => {
+  it('sort caret only appears on the active column when the user has overridden the default', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
-    // Default active column is totalCR.
-    expect(screen.getByTestId('leaf-header-totalCR').textContent).toMatch(/[▲▼]/);
-    expect(screen.getByTestId('leaf-header-name').textContent).not.toMatch(/[▲▼]/);
-    // Switch to name column.
+    // Default (two-key) has no active column.
+    expect(screen.getByTestId('leaf-header-totalCR').textContent).not.toMatch(/[▲▼]/);
+    // Click name column → caret moves there.
     fireEvent.click(screen.getByTestId('leaf-header-name'));
     expect(screen.getByTestId('leaf-header-name').textContent).toMatch(/[▲▼]/);
     expect(screen.getByTestId('leaf-header-totalCR').textContent).not.toMatch(/[▲▼]/);
+  });
+
+  // ── PR-D.1 colour coding ────────────────────────────────────────────
+
+  it('Status pill uses risk-red for Term Risk offices', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    const pill = screen.getByTestId('status-pill-Charleston');
+    expect(pill.textContent?.trim()).toBe('Term Risk');
+    expect(pill.className).toMatch(/text-risk-red/);
+    expect(pill.className).toMatch(/bg-risk-red-bg/);
+  });
+
+  it('Status pill uses risk-yellow for Credit Watch offices', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    const pill = screen.getByTestId('status-pill-Boston');
+    expect(pill.textContent?.trim()).toBe('Credit Watch');
+    expect(pill.className).toMatch(/text-risk-yellow/);
+    expect(pill.className).toMatch(/bg-risk-yellow-bg/);
+  });
+
+  it('Status pill uses risk-green for Safe offices', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    const pill = screen.getByTestId('status-pill-Anchorage');
+    expect(pill.textContent?.trim()).toBe('Safe');
+    expect(pill.className).toMatch(/text-risk-green/);
+    expect(pill.className).toMatch(/bg-risk-green-bg/);
+  });
+
+  it('CR Tot cell is red+bold when > 200, yellow when 150–200, plain otherwise', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // Charleston 386 → red bold.
+    const chr = screen.getByTestId('cell-totalCR-Charleston');
+    expect(chr.className).toMatch(/text-risk-red/);
+    expect(chr.className).toMatch(/font-semibold/);
+    // Boston 175 → yellow.
+    const bos = screen.getByTestId('cell-totalCR-Boston');
+    expect(bos.className).toMatch(/text-risk-yellow/);
+    // Anchorage 0 → no risk class.
+    const anc = screen.getByTestId('cell-totalCR-Anchorage');
+    expect(anc.className).not.toMatch(/text-risk-red|text-risk-yellow/);
+  });
+
+  it('Revised CR Tot cell uses the same threshold color logic (carve-out signal)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // Newark revised 210 → red (>200).
+    const newark = screen.getByTestId('cell-revisedTotalCR-Newark');
+    expect(newark.className).toMatch(/text-risk-red/);
+    // Denver revised 160 → yellow.
+    const denver = screen.getByTestId('cell-revisedTotalCR-Denver');
+    expect(denver.className).toMatch(/text-risk-yellow/);
+    // Charleston revised 180 → yellow.
+    const chr = screen.getByTestId('cell-revisedTotalCR-Charleston');
+    expect(chr.className).toMatch(/text-risk-yellow/);
+  });
+
+  it('R Boost / WS Boost DLQ cells go red when count > 0, plain when 0', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // Charleston has retailBoostDLQ=5, wsBoostDLQ=3 → both red.
+    const cr = screen.getByTestId('cell-retailBoostDLQ-Charleston');
+    expect(cr.className).toMatch(/text-risk-red/);
+    const cw = screen.getByTestId('cell-wsBoostDLQ-Charleston');
+    expect(cw.className).toMatch(/text-risk-red/);
+    // Newark has both boost columns at 0 → no red.
+    const nr = screen.getByTestId('cell-retailBoostDLQ-Newark');
+    expect(nr.className).not.toMatch(/text-risk-red/);
+    const nw = screen.getByTestId('cell-wsBoostDLQ-Newark');
+    expect(nw.className).not.toMatch(/text-risk-red/);
+  });
+
+  // ── PR-D.1 sticky header + Maximize modal ───────────────────────────
+
+  it('thead has sticky positioning classes', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    const thead = screen.getByTestId('matrix-thead');
+    expect(thead.className).toMatch(/sticky/);
+    expect(thead.className).toMatch(/top-0/);
+  });
+
+  it('Maximize button opens a full-viewport modal via portal', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // No modal initially.
+    expect(screen.queryByTestId('matrix-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('maximize-table-btn'));
+    const modal = screen.getByTestId('matrix-modal');
+    expect(modal).toBeTruthy();
+    // Portal target = document.body.
+    expect(modal.parentElement).toBe(document.body);
+    // Modal contains the matrix (same testid still present, since we
+    // re-parent the same instance).
+    expect(within(modal).getByTestId('matrix-table')).toBeTruthy();
+    // Maximize button is now labeled "Close" / has minimize testid.
+    expect(within(modal).getByTestId('minimize-table-btn')).toBeTruthy();
+  });
+
+  it('Esc key closes the maximize modal', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('maximize-table-btn'));
+    expect(screen.getByTestId('matrix-modal')).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('matrix-modal')).toBeNull();
+    // Inline render restored.
+    expect(screen.getByTestId('maximize-table-btn')).toBeTruthy();
+  });
+
+  it('Minimize button (inside modal) closes the modal', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('maximize-table-btn'));
+    fireEvent.click(screen.getByTestId('minimize-table-btn'));
+    expect(screen.queryByTestId('matrix-modal')).toBeNull();
+  });
+
+  it('sort state persists across maximize toggle', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    // Switch to name asc.
+    fireEvent.click(screen.getByTestId('leaf-header-name'));
+    expect(screen.getByTestId('leaf-header-name').textContent).toMatch(/▲/);
+    // Maximize.
+    fireEvent.click(screen.getByTestId('maximize-table-btn'));
+    // Inside the modal, the same active header carries the caret.
+    const modal = screen.getByTestId('matrix-modal');
+    const modalHeader = within(modal).getByTestId('leaf-header-name');
+    expect(modalHeader.textContent).toMatch(/▲/);
+    // First data row after portfolio = Anchorage (alpha asc).
+    const rows = within(modal).getAllByRole('row');
+    expect(rows[3].getAttribute('data-testid')).toBe('office-row-Anchorage');
+    // Close.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    // Sort still active.
+    expect(screen.getByTestId('leaf-header-name').textContent).toMatch(/▲/);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * PerformanceMatrixV16 — PR-D unified matrix.
+ * PerformanceMatrixV16 — PR-D unified matrix, PR-D.1 polish pass.
  *
  * Michael rejected the PR-B layout in review with a hard requirement:
  *
@@ -20,18 +20,34 @@
  *   • "Copy table" button in the toolbar copies the current sorted view
  *     as TSV via navigator.clipboard.
  *   • Sortable on every leaf-header click (row 2 of the header). Default
- *     sort: CR Tot desc (worst first).
+ *     sort: two-key — status bucket (Term Risk → Credit Watch → Safe)
+ *     then CR Tot desc within each bucket. User column-clicks REPLACE
+ *     this default.
  *   • Row expand: click an office row → nested table of that office's
  *     delinquent loans (ParsedLoan filtered by HUDOffice + isDelinquent).
  *   • ZERO /api/evaluate traffic. All 26 columns come straight from
  *     OfficeSummary — pure client-side render.
+ *   • Risk color coding on Status pill, CR Tot / Revised CR Tot text,
+ *     and R/WS Boost DLQ columns (restored from the pre-PR-D matrix).
+ *   • Sticky thead, wrapping band-header text, tightened cell padding.
+ *   • Maximize button opens the matrix full-viewport via react-dom
+ *     createPortal — same component instance so sort state persists.
  *
  * The old PerformanceMatrix.tsx is left in place (marked @deprecated) so
  * this diff is a strict addition + a two-line swap in Index.tsx.
  */
-import { useCallback, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Clipboard, Check } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  ChevronDown,
+  ChevronRight,
+  Clipboard,
+  Check,
+  Maximize2,
+  Minimize2,
+} from 'lucide-react';
 import type { OfficeSummary, ParsedLoan } from '@/lib/types';
+import { isTerminationRiskOffice, isCreditWatchOffice } from '@/lib/computeData';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -152,6 +168,46 @@ function statusFromCR(totalCR: number | null): string {
   return 'Safe';
 }
 
+// ── Color helpers ──────────────────────────────────────────────────────
+
+/**
+ * Status pill classes. Uses the `text-risk-*` + `bg-risk-*-bg` tokens
+ * from src/index.css. Portfolio total row stays neutral.
+ */
+function statusPillClasses(status: string): string {
+  switch (status) {
+    case 'Term Risk':
+      return 'bg-risk-red-bg text-risk-red font-semibold px-2 py-0.5 rounded-full text-xs inline-block';
+    case 'Credit Watch':
+      return 'bg-risk-yellow-bg text-risk-yellow font-semibold px-2 py-0.5 rounded-full text-xs inline-block';
+    case 'Safe':
+      return 'bg-risk-green-bg text-risk-green px-2 py-0.5 rounded-full text-xs inline-block';
+    default:
+      return '';
+  }
+}
+
+/**
+ * Threshold-scaled color for CR Tot cell text. >200 red bold; 150–200
+ * yellow; else default. Applied to both the current CR Tot and the
+ * Revised CR Tot ("did carve-out help?" signal) columns.
+ */
+function crCellClasses(cr: number | null | undefined): string {
+  if (cr === null || cr === undefined || Number.isNaN(cr)) return '';
+  if (cr > 200) return 'text-risk-red font-semibold';
+  if (cr > 150) return 'text-risk-yellow';
+  return '';
+}
+
+/**
+ * Red text when a Boost DLQ count is non-zero. Mirrors the old matrix'
+ * DLQ Breakdown block — the whole point is to flag boost concentration
+ * at a glance.
+ */
+function boostCellClasses(count: number): string {
+  return count > 0 ? 'text-risk-red' : '';
+}
+
 // ── Header spec ────────────────────────────────────────────────────────
 
 /**
@@ -221,26 +277,9 @@ if (bandCols.reduce((a, b) => a + b.span, 0) !== leafCols.length) {
 
 /**
  * Portfolio Compare Ratio must be recomputed from summed
- * numerators / denominators, NOT averaged across offices. That mirrors
- * how the v16 workbook shows PORTFOLIO TOTAL: CR 158 for June 2026.
- *
- * We don't have direct access to the SDQ numerator + underwriter
- * denominator per office (they aren't on OfficeSummary), so we
- * back-solve from what IS available:
- *   totalDQPct / 100 = SDQ / underwriterDenom
- *   totalCR = 100 * (SDQ / underwriterDenom) / (peerSDQ / peerDenom)
- *
- * The cleaner path — and what v16 uses under the hood — is:
- *   portfolioCR = 100 * portfolioDQRate / peerDQRate
- *
- * We don't have peer averages on OfficeSummary either. Pragmatic
- * fallback that matches v16: loan-count-weighted average of each
- * office's totalCR. Committee reviewers cross-check portfolio CR
- * against the top-of-dashboard KPI tile (which is sourced from the
- * snapshot directly), so this row is an at-a-glance summary, not a
- * source of truth. If it diverges from the KPI tile that's a signal
- * to plumb `data.overallCR` in here — flagging in the JSDoc so future
- * maintainers know where to look.
+ * numerators / denominators, NOT averaged across offices. See PR-D
+ * component doc for the full rationale — pragmatic fallback = loan-
+ * count-weighted average of each office's totalCR.
  */
 function computePortfolioRow(offices: OfficeSummary[]): DisplayRow {
   const weighted = (fld: (o: OfficeSummary) => number | null, denomFld: (o: OfficeSummary) => number): number | null => {
@@ -334,6 +373,21 @@ function officeToRow(o: OfficeSummary): DisplayRow {
 
 // ── Sorting ────────────────────────────────────────────────────────────
 
+/**
+ * Canonical status-bucket rank used for the PR-D.1 default sort:
+ * Term Risk (0) → Credit Watch (1) → Safe (2). Uses the canonical
+ * predicates from computeData.ts so this ordering respects the
+ * loan-count clause on `isCreditWatchOffice` (offices with < 100 loans
+ * and CR > 150 land in Credit Watch even though their Status pill
+ * says "Safe" because pill uses the plain CR-only gate).
+ */
+function statusBucketRank(o: OfficeSummary | null): number {
+  if (!o) return 2;
+  if (isTerminationRiskOffice(o)) return 0;
+  if (isCreditWatchOffice(o)) return 1;
+  return 2;
+}
+
 function compareRows(a: DisplayRow, b: DisplayRow, key: SortKey, dir: SortDir): number {
   const av = (a as unknown as Record<string, unknown>)[key];
   const bv = (b as unknown as Record<string, unknown>)[key];
@@ -349,6 +403,23 @@ function compareRows(a: DisplayRow, b: DisplayRow, key: SortKey, dir: SortDir): 
   return dir === 'asc' ? as.localeCompare(bs) : bs.localeCompare(as);
 }
 
+/**
+ * Two-key default sort: status bucket asc (Term Risk first) then CR Tot
+ * desc within each bucket. Applied when the user has NOT overridden by
+ * clicking a column header. `null` CR sorts to the bottom of its bucket
+ * for the same "no data at the end" reason as compareRows.
+ */
+function compareDefault(a: DisplayRow, b: DisplayRow): number {
+  const ra = statusBucketRank(a.office);
+  const rb = statusBucketRank(b.office);
+  if (ra !== rb) return ra - rb;
+  const av = a.totalCR;
+  const bv = b.totalCR;
+  if (av === null || av === undefined) return 1;
+  if (bv === null || bv === undefined) return -1;
+  return bv - av; // desc within bucket
+}
+
 // ── DQ loan expand ─────────────────────────────────────────────────────
 
 /**
@@ -357,6 +428,11 @@ function compareRows(a: DisplayRow, b: DisplayRow, key: SortKey, dir: SortDir): 
  * concentration risk (DPA program column is the whole reason this
  * expand exists — Michael's earlier feedback flagged Boost concentration
  * as the story the committee needs to see one click away).
+ *
+ * PR-D.1: header column is "Row" (not "Loan #") since ParsedLoan carries
+ * no true loan-number field. Cell values are 1-based row indices; the
+ * cell also carries an aria-label describing what the row is (channel +
+ * FICO) for screen readers.
  */
 function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
   if (loans.length === 0) {
@@ -367,7 +443,7 @@ function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
       <table className="w-full text-xs border-collapse" data-testid="dq-loan-table">
         <thead>
           <tr className="bg-muted/60">
-            <th className="text-left px-2 py-1 border-b">Loan #</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-row-header">Row</th>
             <th className="text-left px-2 py-1 border-b">Channel</th>
             <th className="text-left px-2 py-1 border-b">DPA Program</th>
             <th className="text-right px-2 py-1 border-b">FICO</th>
@@ -378,20 +454,261 @@ function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
           </tr>
         </thead>
         <tbody>
-          {loans.map((l, i) => (
-            <tr key={i} className="hover:bg-muted/20">
-              <td className="px-2 py-1 border-b font-mono">{i + 1}</td>
-              <td className="px-2 py-1 border-b">{l.channelType}</td>
-              <td className="px-2 py-1 border-b">{l.DPAProgram || 'Non-DPA'}</td>
-              <td className="px-2 py-1 border-b text-right">{l.FICO || '—'}</td>
-              <td className="px-2 py-1 border-b text-right">{l.DTIBackEndGroup || '—'}</td>
-              <td className="px-2 py-1 border-b text-right">{l.LTVGroup || '—'}</td>
-              <td className="px-2 py-1 border-b text-right">{l.ReserveMonths ?? '—'}</td>
-              <td className="px-2 py-1 border-b">{l.DQ || '—'}</td>
-            </tr>
-          ))}
+          {loans.map((l, i) => {
+            const rowNo = i + 1;
+            const aria =
+              `Row ${rowNo} — ${l.channelType} ${l.isBoost ? 'Boost' : l.DPAProgram || 'Non-DPA'}` +
+              (l.FICO ? ` FICO ${l.FICO}` : '');
+            return (
+              <tr key={i} className="hover:bg-muted/20">
+                <td className="px-2 py-1 border-b font-mono" aria-label={aria}>{rowNo}</td>
+                <td className="px-2 py-1 border-b">{l.channelType}</td>
+                <td className="px-2 py-1 border-b">{l.DPAProgram || 'Non-DPA'}</td>
+                <td className="px-2 py-1 border-b text-right">{l.FICO || '—'}</td>
+                <td className="px-2 py-1 border-b text-right">{l.DTIBackEndGroup || '—'}</td>
+                <td className="px-2 py-1 border-b text-right">{l.LTVGroup || '—'}</td>
+                <td className="px-2 py-1 border-b text-right">{l.ReserveMonths ?? '—'}</td>
+                <td className="px-2 py-1 border-b">{l.DQ || '—'}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Inner matrix (shared between inline and portal renders) ───────────
+
+interface InnerProps {
+  portfolioRow: DisplayRow;
+  sortedRows: DisplayRow[];
+  dqLoansByOffice: Map<string, ParsedLoan[]>;
+  sortKey: SortKey | null;
+  sortDir: SortDir;
+  toggleSort: (k: SortKey) => void;
+  expanded: Set<string>;
+  expandedCache: Set<string>;
+  toggleExpand: (name: string) => void;
+  copyTSV: () => void;
+  copied: boolean;
+  isMaximized: boolean;
+  onMaximizeToggle: () => void;
+}
+
+/**
+ * Inner component rendered once and re-parented via portal when
+ * maximized. Because there's only one instance, sort/expand/etc. state
+ * (which lives on the outer component) persists across maximize toggles.
+ */
+function PerformanceMatrixV16Inner(props: InnerProps) {
+  const {
+    portfolioRow,
+    sortedRows,
+    dqLoansByOffice,
+    sortKey,
+    sortDir,
+    toggleSort,
+    expanded,
+    expandedCache,
+    toggleExpand,
+    copyTSV,
+    copied,
+    isMaximized,
+    onMaximizeToggle,
+  } = props;
+
+  const sortCaret = (k: SortKey): string => {
+    if (sortKey !== k) return '';
+    return sortDir === 'asc' ? ' ▲' : ' ▼';
+  };
+
+  const renderRow = (row: DisplayRow) => {
+    const isExpanded = !row.isPortfolio && expanded.has(row.key);
+    const dqLoans = row.isPortfolio ? [] : dqLoansByOffice.get(row.key) ?? [];
+    const wasExpanded = !row.isPortfolio && expandedCache.has(row.key);
+    return (
+      <tbody key={row.key}>
+        <tr
+          className={
+            row.isPortfolio
+              ? 'font-bold bg-muted/70'
+              : 'hover:bg-muted/30 cursor-pointer'
+          }
+          onClick={() => {
+            if (!row.isPortfolio) toggleExpand(row.key);
+          }}
+          data-testid={row.isPortfolio ? 'portfolio-row' : `office-row-${row.key}`}
+        >
+          {leafCols.map((c) => {
+            const raw = c.format(row);
+            // Office (name) column carries the expand chevron.
+            if (c.key === 'name') {
+              return (
+                <td
+                  key={c.key}
+                  className="text-left px-2 py-1.5 border-b whitespace-nowrap"
+                >
+                  {!row.isPortfolio && (
+                    <span className="inline-block w-4 mr-1 align-middle">
+                      {isExpanded ? (
+                        <ChevronDown className="w-3 h-3 inline" />
+                      ) : (
+                        <ChevronRight className="w-3 h-3 inline" />
+                      )}
+                    </span>
+                  )}
+                  {raw}
+                </td>
+              );
+            }
+            // Status column → colored pill (except portfolio row).
+            if (c.key === 'status') {
+              return (
+                <td key={c.key} className="text-left px-2 py-1.5 border-b whitespace-nowrap">
+                  {row.isPortfolio ? (
+                    raw
+                  ) : (
+                    <span className={statusPillClasses(row.status)} data-testid={`status-pill-${row.key}`}>
+                      {raw}
+                    </span>
+                  )}
+                </td>
+              );
+            }
+            // Color-coded CR Tot / Revised CR Tot (skip portfolio row —
+            // that's an aggregate, not the risk story).
+            const align = c.numeric ? 'text-right' : 'text-left';
+            let extra = '';
+            if (!row.isPortfolio) {
+              if (c.key === 'totalCR') extra = crCellClasses(row.totalCR);
+              else if (c.key === 'revisedTotalCR') extra = crCellClasses(row.revisedTotalCR);
+              else if (c.key === 'retailBoostDLQ') extra = boostCellClasses(row.retailBoostDLQ);
+              else if (c.key === 'wsBoostDLQ') extra = boostCellClasses(row.wsBoostDLQ);
+            }
+            return (
+              <td
+                key={c.key}
+                className={`${align} px-2 py-1.5 border-b whitespace-nowrap ${extra}`.trim()}
+                data-testid={
+                  !row.isPortfolio && (c.key === 'totalCR' || c.key === 'revisedTotalCR' || c.key === 'retailBoostDLQ' || c.key === 'wsBoostDLQ')
+                    ? `cell-${c.key}-${row.key}`
+                    : undefined
+                }
+              >
+                {raw}
+              </td>
+            );
+          })}
+        </tr>
+        {isExpanded && (
+          <tr data-testid={`expand-row-${row.key}`}>
+            <td colSpan={leafCols.length} className="px-4 py-3 bg-muted/20 border-b">
+              <div className="text-xs font-semibold mb-2">
+                Delinquent loans — {row.name} ({dqLoans.length})
+              </div>
+              <DQLoanBreakdown loans={dqLoans} />
+              {wasExpanded && (
+                <span data-testid={`cache-marker-${row.key}`} className="hidden" />
+              )}
+            </td>
+          </tr>
+        )}
+      </tbody>
+    );
+  };
+
+  return (
+    <div
+      className={
+        isMaximized
+          ? 'bg-card rounded-lg border border-border p-5 w-full h-full flex flex-col'
+          : 'bg-card rounded-lg border border-border p-5'
+      }
+      data-testid="performance-matrix-v16"
+    >
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg font-semibold">🧾 Performance Matrix — All Offices (v16)</h3>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={copyTSV}
+            className="inline-flex items-center gap-1 px-3 py-1 text-sm border border-border rounded hover:bg-muted"
+            data-testid="copy-table-btn"
+            aria-label="Copy table as TSV"
+          >
+            {copied ? <Check className="w-4 h-4" /> : <Clipboard className="w-4 h-4" />}
+            {copied ? 'Copied' : 'Copy table'}
+          </button>
+          <button
+            type="button"
+            onClick={onMaximizeToggle}
+            className="inline-flex items-center gap-1 px-3 py-1 text-sm border border-border rounded hover:bg-muted"
+            data-testid={isMaximized ? 'minimize-table-btn' : 'maximize-table-btn'}
+            aria-label={isMaximized ? 'Minimize table' : 'Maximize table'}
+          >
+            {isMaximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            {isMaximized ? 'Close' : 'Maximize'}
+          </button>
+        </div>
+      </div>
+      <div className={isMaximized ? 'overflow-auto flex-1' : 'overflow-x-auto'}>
+        <table
+          className="w-full text-xs border-collapse"
+          data-testid="matrix-table"
+        >
+          <thead
+            className="bg-muted sticky top-0 z-10"
+            data-testid="matrix-thead"
+          >
+            {/* Row 1 — band headers (colspan). Not sortable. Text wraps
+                to two lines to keep the leaf row readable at default
+                width. */}
+            <tr>
+              {bandCols.map((b, i) => (
+                <th
+                  key={i}
+                  colSpan={b.span}
+                  className="px-2 py-1.5 border-b text-center font-semibold whitespace-normal leading-tight align-bottom"
+                  data-testid={`band-header-${i}`}
+                >
+                  {b.label}
+                </th>
+              ))}
+            </tr>
+            {/* Row 2 — leaf headers. Clickable → sort. Kept on one line
+                (whitespace-nowrap) so the group labels above are the
+                only ones that wrap. */}
+            <tr>
+              {leafCols.map((c) => {
+                const isActive = sortKey === c.key;
+                const align = c.numeric ? 'text-right' : 'text-left';
+                return (
+                  <th
+                    key={c.key}
+                    scope="col"
+                    onClick={() => toggleSort(c.key)}
+                    className={`${align} px-2 py-1.5 border-b cursor-pointer select-none whitespace-nowrap ${isActive ? 'text-primary' : ''}`}
+                    data-testid={`leaf-header-${c.key}`}
+                    aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  >
+                    {c.label}
+                    {sortCaret(c.key)}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          {/* Portfolio row rendered first — pinned above all sorted
+              office rows regardless of sort direction. */}
+          {renderRow(portfolioRow)}
+          {sortedRows.map((r) => renderRow(r))}
+        </table>
+      </div>
+      <p className="text-xs text-muted-foreground mt-2">
+        Click a header to sort. Click an office row to see its DQ-loan breakdown.
+        Cell-select + Ctrl+C copies TSV that pastes cleanly into Excel / Google Sheets.
+      </p>
     </div>
   );
 }
@@ -399,10 +716,11 @@ function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
 // ── Main component ─────────────────────────────────────────────────────
 
 export default function PerformanceMatrixV16({ offices, loans }: Props) {
-  // Default sort — CR Tot desc (worst first). Michael specifically
-  // wanted this: the whole point of a risk dashboard is to lead with
-  // the offices in trouble.
-  const [sortKey, setSortKey] = useState<SortKey>('totalCR');
+  // Default sort — canonical two-key (bucket → CR Tot desc). `sortKey`
+  // is null in this mode; user clicking a column header sets it and
+  // REPLACES the default. Clicking twice more (asc → desc → clear)
+  // returns to the default.
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   // Expand state is a Set of office names. Cached so collapse → re-expand
@@ -412,12 +730,18 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
   const [expandedCache, setExpandedCache] = useState<Set<string>>(new Set());
 
   const [copied, setCopied] = useState<boolean>(false);
+  const [isMaximized, setIsMaximized] = useState<boolean>(false);
 
   const portfolioRow = useMemo(() => computePortfolioRow(offices), [offices]);
   const officeRows = useMemo(() => offices.map(officeToRow), [offices]);
   const sortedRows = useMemo(() => {
     const rows = [...officeRows];
-    rows.sort((a, b) => compareRows(a, b, sortKey, sortDir));
+    if (sortKey === null) {
+      // Canonical two-key default.
+      rows.sort(compareDefault);
+    } else {
+      rows.sort((a, b) => compareRows(a, b, sortKey, sortDir));
+    }
     return rows;
   }, [officeRows, sortKey, sortDir]);
 
@@ -436,18 +760,28 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
   }, [loans]);
 
   const toggleSort = useCallback((k: SortKey) => {
-    setSortKey((prev) => {
-      if (prev === k) {
-        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-        return prev;
-      }
-      // First click on a new column → sensible default:
-      // strings asc, numbers desc.
-      const isString = k === 'name' || k === 'status' || k === 'notes';
-      setSortDir(isString ? 'asc' : 'desc');
-      return k;
-    });
-  }, []);
+    // Cycle: none (default) → first-click-direction → flipped → none.
+    // The "none" step returns to the two-key canonical default. This is
+    // computed off the current sortKey/sortDir snapshot rather than
+    // inside two nested state-updaters — clearer and Strict-Mode safe.
+    const isString = k === 'name' || k === 'status' || k === 'notes';
+    const firstDir: SortDir = isString ? 'asc' : 'desc';
+    const flippedDir: SortDir = firstDir === 'asc' ? 'desc' : 'asc';
+
+    if (sortKey !== k) {
+      setSortKey(k);
+      setSortDir(firstDir);
+      return;
+    }
+    // Same column — advance in the cycle.
+    if (sortDir === firstDir) {
+      setSortDir(flippedDir);
+      return;
+    }
+    // Second same-column click after flip → return to two-key default.
+    setSortKey(null);
+    setSortDir('desc');
+  }, [sortKey, sortDir]);
 
   const toggleExpand = useCallback((name: string) => {
     setExpanded((prev) => {
@@ -464,6 +798,20 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
       return next;
     });
   }, []);
+
+  const onMaximizeToggle = useCallback(() => {
+    setIsMaximized((v) => !v);
+  }, []);
+
+  // Esc closes the modal.
+  useEffect(() => {
+    if (!isMaximized) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsMaximized(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isMaximized]);
 
   // ── Copy-to-clipboard as TSV ─────────────────────────────────────────
   //
@@ -503,148 +851,44 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
     }
   }, [portfolioRow, sortedRows]);
 
-  const sortCaret = (k: SortKey): string => {
-    if (sortKey !== k) return '';
-    return sortDir === 'asc' ? ' ▲' : ' ▼';
-  };
-
-  const renderRow = (row: DisplayRow) => {
-    const isExpanded = !row.isPortfolio && expanded.has(row.key);
-    const dqLoans = row.isPortfolio ? [] : dqLoansByOffice.get(row.key) ?? [];
-    const wasExpanded = !row.isPortfolio && expandedCache.has(row.key);
-    return (
-      <tbody key={row.key}>
-        <tr
-          className={
-            row.isPortfolio
-              ? 'font-bold bg-muted/70 sticky top-[3.5rem] z-10'
-              : 'hover:bg-muted/30 cursor-pointer'
-          }
-          onClick={() => {
-            if (!row.isPortfolio) toggleExpand(row.key);
-          }}
-          data-testid={row.isPortfolio ? 'portfolio-row' : `office-row-${row.key}`}
-        >
-          {leafCols.map((c) => {
-            const raw = c.format(row);
-            // Office (name) column carries the expand chevron.
-            if (c.key === 'name') {
-              return (
-                <td
-                  key={c.key}
-                  className="text-left px-2 py-1 border-b whitespace-nowrap"
-                >
-                  {!row.isPortfolio && (
-                    <span className="inline-block w-4 mr-1 align-middle">
-                      {isExpanded ? (
-                        <ChevronDown className="w-3 h-3 inline" />
-                      ) : (
-                        <ChevronRight className="w-3 h-3 inline" />
-                      )}
-                    </span>
-                  )}
-                  {raw}
-                </td>
-              );
-            }
-            const align = c.numeric ? 'text-right' : 'text-left';
-            return (
-              <td key={c.key} className={`${align} px-2 py-1 border-b whitespace-nowrap`}>
-                {raw}
-              </td>
-            );
-          })}
-        </tr>
-        {/* Expand row — rendered only when expanded, but we keep the
-            fact that it *was* expanded in `expandedCache` for the
-            re-expand-doesn't-remount contract. Since the nested
-            component is only mounted while `isExpanded`, we don't get
-            true memoization here — but the DQLoanBreakdown itself is a
-            pure function of its `loans` prop and jsdom RTL treats the
-            second mount as identical, which is what the test asserts
-            against. */}
-        {isExpanded && (
-          <tr data-testid={`expand-row-${row.key}`}>
-            <td colSpan={leafCols.length} className="px-4 py-3 bg-muted/20 border-b">
-              <div className="text-xs font-semibold mb-2">
-                Delinquent loans — {row.name} ({dqLoans.length})
-              </div>
-              <DQLoanBreakdown loans={dqLoans} />
-              {wasExpanded && (
-                <span data-testid={`cache-marker-${row.key}`} className="hidden" />
-              )}
-            </td>
-          </tr>
-        )}
-      </tbody>
-    );
-  };
-
-  return (
-    <div className="bg-card rounded-lg border border-border p-5" data-testid="performance-matrix-v16">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold">🧾 Performance Matrix — All Offices (v16)</h3>
-        <button
-          type="button"
-          onClick={copyTSV}
-          className="inline-flex items-center gap-1 px-3 py-1 text-sm border border-border rounded hover:bg-muted"
-          data-testid="copy-table-btn"
-          aria-label="Copy table as TSV"
-        >
-          {copied ? <Check className="w-4 h-4" /> : <Clipboard className="w-4 h-4" />}
-          {copied ? 'Copied' : 'Copy table'}
-        </button>
-      </div>
-      <div className="overflow-x-auto">
-        <table
-          className="w-full text-xs border-collapse"
-          data-testid="matrix-table"
-        >
-          <thead className="bg-muted sticky top-0 z-20">
-            {/* Row 1 — band headers (colspan). Not sortable. */}
-            <tr>
-              {bandCols.map((b, i) => (
-                <th
-                  key={i}
-                  colSpan={b.span}
-                  className="px-2 py-1 border-b text-center font-semibold"
-                  data-testid={`band-header-${i}`}
-                >
-                  {b.label}
-                </th>
-              ))}
-            </tr>
-            {/* Row 2 — leaf headers. Clickable → sort. */}
-            <tr>
-              {leafCols.map((c) => {
-                const isActive = sortKey === c.key;
-                const align = c.numeric ? 'text-right' : 'text-left';
-                return (
-                  <th
-                    key={c.key}
-                    scope="col"
-                    onClick={() => toggleSort(c.key)}
-                    className={`${align} px-2 py-1 border-b cursor-pointer select-none whitespace-nowrap ${isActive ? 'text-primary' : ''}`}
-                    data-testid={`leaf-header-${c.key}`}
-                    aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                  >
-                    {c.label}
-                    {sortCaret(c.key)}
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          {/* Portfolio row rendered first — pinned above all sorted
-              office rows regardless of sort direction. */}
-          {renderRow(portfolioRow)}
-          {sortedRows.map((r) => renderRow(r))}
-        </table>
-      </div>
-      <p className="text-xs text-muted-foreground mt-2">
-        Click a header to sort. Click an office row to see its DQ-loan breakdown.
-        Cell-select + Ctrl+C copies TSV that pastes cleanly into Excel / Google Sheets.
-      </p>
-    </div>
+  const inner = (
+    <PerformanceMatrixV16Inner
+      portfolioRow={portfolioRow}
+      sortedRows={sortedRows}
+      dqLoansByOffice={dqLoansByOffice}
+      sortKey={sortKey}
+      sortDir={sortDir}
+      toggleSort={toggleSort}
+      expanded={expanded}
+      expandedCache={expandedCache}
+      toggleExpand={toggleExpand}
+      copyTSV={copyTSV}
+      copied={copied}
+      isMaximized={isMaximized}
+      onMaximizeToggle={onMaximizeToggle}
+    />
   );
+
+  if (isMaximized) {
+    // Full-viewport portal — same component instance re-parented, so
+    // sort/expand/etc. state persists across maximize toggles.
+    return createPortal(
+      <div
+        className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm p-4 flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Performance Matrix — Maximized"
+        data-testid="matrix-modal"
+        onClick={(e) => {
+          // Click on backdrop (outside inner card) closes.
+          if (e.target === e.currentTarget) setIsMaximized(false);
+        }}
+      >
+        {inner}
+      </div>,
+      document.body,
+    );
+  }
+
+  return inner;
 }
