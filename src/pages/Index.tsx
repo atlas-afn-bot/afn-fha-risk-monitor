@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { buildDashboardFromSnapshot } from '@/lib/computeData';
 import type { DashboardData } from '@/lib/types';
 import type { Snapshot, SnapshotIndex } from '@/types/snapshot';
@@ -37,7 +37,7 @@ import FileUploads from '@/components/tabs/FileUploads';
 import Projections from '@/components/tabs/Projections';
 import { exportDashboardPDF } from '@/lib/exportPDF';
 import {
-  Moon, Sun, FileDown, Loader2, AlertTriangle,
+  Moon, Sun, FileDown, Loader2, AlertTriangle, FlaskConical,
 } from 'lucide-react';
 
 type TabId =
@@ -342,6 +342,15 @@ export default function Index() {
                     onChange={handlePeriodChange}
                     disabled={loading}
                   />
+                  {/* PR-C — Scenario Builder entry point. Design doc §5.4. */}
+                  <Link
+                    to="/scenarios"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md border border-primary/40 text-primary hover:bg-primary/10 transition-colors"
+                    data-testid="scenarios-nav-link"
+                  >
+                    <FlaskConical className="w-3.5 h-3.5" />
+                    Scenarios
+                  </Link>
                   <button
                     onClick={() => exportDashboardPDF(data, performancePeriod, selectedPeriod)}
                     className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
