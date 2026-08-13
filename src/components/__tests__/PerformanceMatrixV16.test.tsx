@@ -1,11 +1,12 @@
 /**
- * PerformanceMatrixV16 — behavior tests for PR-D + PR-D.1 polish.
+ * PerformanceMatrixV16 — behavior tests for PR-D + PR-D.1 / D.2 / D.3.
  *
  * Covers the acceptance criteria from the PR-D and PR-D.1 briefs:
- *   1. Renders the two-row grouped header with 26 leaf columns matching
- *      the v16 sheet spec (Office | CR ×3 | Loans ×3 | DQ ×3 |
+ *   1. Renders the two-row grouped header with 25 leaf columns
+ *      (PR-D.3 dropped the always-empty Notes column) matching the v16
+ *      sheet shape (Office | CR ×3 | Loans ×3 | DQ ×3 |
  *      DLQ Breakdown ×6 | Removed ×2 | Revised CR ×3 | DPA Conc% ×3 |
- *      Status | Notes).
+ *      Status).
  *   2. Renders every office as a row (no cap, no CR-band filter).
  *   3. PORTFOLIO TOTAL row pinned at the top with correct summed
  *      values.
@@ -185,7 +186,7 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     cleanup();
   });
 
-  it('renders exactly 26 leaf columns in the v16 order', () => {
+  it('renders exactly 25 leaf columns in the v16 order (PR-D.3: Notes dropped)', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     const expected = [
       'name',
@@ -197,15 +198,17 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
       'retailRemoved', 'wsRemoved',
       'revisedTotalCR', 'revisedRetailCR', 'revisedWSCR',
       'totalDPAConc', 'retailDPAConc', 'wsDPAConc',
-      'status', 'notes',
+      'status',
     ];
-    expect(expected).toHaveLength(26);
+    expect(expected).toHaveLength(25);
     for (const k of expected) {
       expect(screen.getByTestId(`leaf-header-${k}`)).toBeTruthy();
     }
+    // PR-D.3: Notes leaf header must be gone.
+    expect(screen.queryByTestId('leaf-header-notes')).toBeNull();
   });
 
-  it('renders the 10 band headers with the correct colspan pattern', () => {
+  it('renders the 9 band headers with the correct colspan pattern (PR-D.3: Notes dropped)', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     // Expected labels and spans (see brief).
     const expected: Array<[string, number]> = [
@@ -218,15 +221,16 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
       ['Revised CR', 3],
       ['DPA Conc%', 3],
       ['Status', 1],
-      ['Notes', 1],
     ];
     expected.forEach(([label, span], i) => {
       const th = screen.getByTestId(`band-header-${i}`) as HTMLTableCellElement;
       expect(th.textContent?.trim()).toBe(label);
       expect(th.colSpan).toBe(span);
     });
-    // Sanity — spans sum to 26.
-    expect(expected.reduce((a, [, s]) => a + s, 0)).toBe(26);
+    // 10th band header (Notes) must be absent.
+    expect(screen.queryByTestId('band-header-9')).toBeNull();
+    // Sanity — spans sum to 25.
+    expect(expected.reduce((a, [, s]) => a + s, 0)).toBe(25);
   });
 
   it('renders every office row (no top-N cap)', () => {
@@ -248,8 +252,11 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     expect(cells[4].textContent?.trim()).toBe('2102');
     // Total DLQ: 20 + 40 + 25 + 15 + 0 = 100.
     expect(cells[7].textContent?.trim()).toBe('100');
-    // Notes column carries 'Portfolio-wide'.
-    expect(cells[25].textContent?.trim()).toBe('Portfolio-wide');
+    // PR-D.3 dropped the trailing Notes column — last data cell (24)
+    // is now the Status column and reads 'Safe' for the portfolio row.
+    expect(cells[24].textContent?.trim()).toBe('Safe');
+    // Sanity: 25 cells total, no trailing Notes cell.
+    expect(cells).toHaveLength(25);
   });
 
   it('portfolio row stays pinned above sorted rows regardless of sort order', () => {
@@ -339,6 +346,8 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     expect(cells[18].textContent?.trim()).toBe('—');
     // But totalLoans is 2, not null → column index 4.
     expect(cells[4].textContent?.trim()).toBe('2');
+    // Sanity: with Notes gone, office rows have 25 cells.
+    expect(cells).toHaveLength(25);
   });
 
   it('Copy button writes TSV to navigator.clipboard', async () => {
@@ -442,16 +451,33 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
 
   // ── PR-D.2 issue 3 — Status column dropped from DQ table ────────
 
-  it('DQ expand table no longer renders a Status column (issue 3)', () => {
+  it('DQ expand table no longer renders a Status column (issue 3, retained through PR-D.3)', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     fireEvent.click(screen.getByTestId('office-row-Charleston'));
     const dqTable = screen.getByTestId('dq-loan-table');
     const headerRow = within(dqTable).getAllByRole('row')[0];
     const headerCells = within(headerRow).getAllByRole('columnheader');
-    // 7 columns: Loan# | Channel | DPA | FICO | DTI | LTV | Reserves.
-    expect(headerCells).toHaveLength(7);
+    // PR-D.3 grew the DQ table from 7 to 13 columns:
+    // Loan# | Channel | DPA Program | Loan Program | FICO | AUS |
+    // Manual UW | DTI | LTV | Reserves | Gift/Grant | Pmt Shock | FTHB.
+    expect(headerCells).toHaveLength(13);
     const headers = headerCells.map(h => h.textContent?.trim());
     expect(headers).not.toContain('Status');
+    expect(headers).toEqual([
+      'Loan #',
+      'Channel',
+      'DPA Program',
+      'Loan Program',
+      'FICO',
+      'AUS',
+      'Manual UW',
+      'DTI',
+      'LTV',
+      'Reserves',
+      'Gift/Grant',
+      'Pmt Shock',
+      'FTHB',
+    ]);
   });
 
   it('shows "no delinquent loans" empty state when an office has none', () => {
@@ -616,30 +642,38 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     expect(screen.getByTestId('leaf-header-name').textContent).toMatch(/▲/);
   });
 
-  // ── PR-D.2 issue 1 — alternating row shading ──────────────────
+  // ── PR-D.3 issue 1 — alternating row shading (fixed) ────────────
 
-  it('office rows carry alternating shading (bg-muted/20 on odd office indices)', () => {
+  it('office rows carry alternating shading (bg-muted/40 on odd office indices, no dead `even:` class)', () => {
     render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
     // Default sort order: Charleston (0), Newark (1), Denver (2),
-    // Boston (3), Anchorage (4). Odd indices should be shaded.
+    // Boston (3), Anchorage (4). Odd indices should be shaded with
+    // bg-muted/40 — PR-D.3 bumped the contrast after PR-D.2's
+    // bg-muted/20 was too subtle to see under the card background.
     const secondOfficeRow = screen.getByTestId('office-row-Newark');
-    expect(secondOfficeRow.className).toMatch(/bg-muted\/20/);
-    // The Tailwind `even:` selector class is present on every office
-    // row too (see comment in renderRow — kept for future-proofing).
-    expect(secondOfficeRow.className).toMatch(/even:/);
-    // First office row (0) should NOT carry the shade class directly
-    // (it still has `even:bg-muted/20` in the class string, but no
-    // resolved bg on its own).
+    const secondTokens = secondOfficeRow.className.split(/\s+/);
+    expect(secondTokens).toContain('bg-muted/40');
+    // PR-D.2's dead `even:bg-muted/20` selector must be gone — it never
+    // fired (each office row is alone in its <tbody>), so shipping it
+    // is cargo-cult.
+    expect(secondOfficeRow.className).not.toMatch(/even:/);
+    // The PR-D.2 opacity level must not sneak back in.
+    expect(secondTokens).not.toContain('bg-muted/20');
+
+    // First office row (index 0, even) should carry no shade.
     const firstOfficeRow = screen.getByTestId('office-row-Charleston');
-    // Split-and-check to ensure the shade token isn't present as a
-    // stand-alone (only as part of the `even:` prefix).
-    const tokens = firstOfficeRow.className.split(/\s+/);
-    expect(tokens).not.toContain('bg-muted/20');
+    const firstTokens = firstOfficeRow.className.split(/\s+/);
+    expect(firstTokens).not.toContain('bg-muted/40');
+    expect(firstTokens).not.toContain('bg-muted/20');
+    expect(firstOfficeRow.className).not.toMatch(/even:/);
+
     // Portfolio row keeps its distinct bold-header background, not
     // the alternating shade.
     const portfolio = screen.getByTestId('portfolio-row');
     expect(portfolio.className).toMatch(/bg-muted\/70/);
     expect(portfolio.className).not.toMatch(/even:/);
+    const portfolioTokens = portfolio.className.split(/\s+/);
+    expect(portfolioTokens).not.toContain('bg-muted/40');
   });
 
   // ── PR-D.2 issue 4 — trends summary section above DQ table ──────
@@ -749,5 +783,209 @@ describe('PerformanceMatrixV16 — PR-D + PR-D.1 unified matrix', () => {
     // Empty-state string still surfaces.
     const expand = screen.getByTestId('expand-row-Anchorage');
     expect(expand.textContent).toContain('No delinquent loans');
+  });
+
+  // ── PR-D.3 issue 2 — richer DQ columns (Loan Program, AUS, Manual UW,
+  //                     Gift/Grant, Pmt Shock, FTHB) ────────────────
+
+  it('DQ expand renders Loan Program + AUS + Manual UW + Gift/Grant + Pmt Shock + FTHB columns (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    // All six new header data-testids should be present.
+    expect(screen.getByTestId('dq-loan-loanprogram-header').textContent?.trim()).toBe('Loan Program');
+    expect(screen.getByTestId('dq-loan-aus-header').textContent?.trim()).toBe('AUS');
+    expect(screen.getByTestId('dq-loan-manualuw-header').textContent?.trim()).toBe('Manual UW');
+    expect(screen.getByTestId('dq-loan-giftgrant-header').textContent?.trim()).toBe('Gift/Grant');
+    expect(screen.getByTestId('dq-loan-pmtshock-header').textContent?.trim()).toBe('Pmt Shock');
+    expect(screen.getByTestId('dq-loan-fthb-header').textContent?.trim()).toBe('FTHB');
+  });
+
+  it('DQ expand column order is Loan# / Channel / DPA / Loan Program / FICO / AUS / Manual UW / DTI / LTV / Reserves / Gift/Grant / Pmt Shock / FTHB (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const dqTable = screen.getByTestId('dq-loan-table');
+    const headerCells = within(within(dqTable).getAllByRole('row')[0]).getAllByRole('columnheader');
+    const labels = headerCells.map(c => c.textContent?.trim());
+    expect(labels).toEqual([
+      'Loan #',
+      'Channel',
+      'DPA Program',
+      'Loan Program',
+      'FICO',
+      'AUS',
+      'Manual UW',
+      'DTI',
+      'LTV',
+      'Reserves',
+      'Gift/Grant',
+      'Pmt Shock',
+      'FTHB',
+    ]);
+  });
+
+  it('Manual UW cell renders "Yes" in text-risk-red font-semibold when HasManualUW=true (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    // Charleston DQ loan 0 has HasManualUW: true.
+    const row0 = screen.getByTestId('dq-loan-row-0');
+    // Manual UW is the 7th cell (0-indexed 6).
+    const cells = within(row0).getAllByRole('cell');
+    const manualUw = cells[6];
+    expect(manualUw.textContent?.trim()).toBe('Yes');
+    const yesSpan = manualUw.querySelector('span');
+    expect(yesSpan?.className).toMatch(/text-risk-red/);
+    expect(yesSpan?.className).toMatch(/font-semibold/);
+    // Charleston DQ loan 1 has HasManualUW: false — blank cell.
+    const row1 = screen.getByTestId('dq-loan-row-1');
+    const cells1 = within(row1).getAllByRole('cell');
+    expect(cells1[6].textContent?.trim()).toBe('');
+  });
+
+  it('Gift/Grant cell renders "Yes" in text-risk-yellow when HasGiftGrant=true (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    // Charleston DQ loan 1 has HasGiftGrant: true.
+    const row1 = screen.getByTestId('dq-loan-row-1');
+    const cells = within(row1).getAllByRole('cell');
+    // Gift/Grant is the 11th cell (0-indexed 10).
+    const giftGrant = cells[10];
+    expect(giftGrant.textContent?.trim()).toBe('Yes');
+    const yesSpan = giftGrant.querySelector('span');
+    expect(yesSpan?.className).toMatch(/text-risk-yellow/);
+    // Charleston DQ loan 0 has HasGiftGrant: false — blank cell.
+    const row0 = screen.getByTestId('dq-loan-row-0');
+    const cells0 = within(row0).getAllByRole('cell');
+    expect(cells0[10].textContent?.trim()).toBe('');
+  });
+
+  it('Pmt Shock cell renders as "N%" (rounded) when positive, em-dash when 0/missing (issue 2)', () => {
+    // Custom fixture so we can exercise both branches deterministically.
+    const officesLocal = [makeOffice('ShockCity', { totalCR: 250, totalLoans: 5, totalDLQ: 2 })];
+    const loansLocal = [
+      makeLoan('ShockCity', true, { LoanNumber: 'S1', PaymentShock: 47.6 }),
+      makeLoan('ShockCity', true, { LoanNumber: 'S2', PaymentShock: 0 }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-ShockCity'));
+    const row0 = screen.getByTestId('dq-loan-row-0');
+    const cells0 = within(row0).getAllByRole('cell');
+    // Pmt Shock is the 12th cell (0-indexed 11).
+    expect(cells0[11].textContent?.trim()).toBe('48%');
+    const row1 = screen.getByTestId('dq-loan-row-1');
+    const cells1 = within(row1).getAllByRole('cell');
+    expect(cells1[11].textContent?.trim()).toBe('—');
+  });
+
+  it('Loan Program / AUS / FTHB cells render the raw string value (issue 2)', () => {
+    render(<PerformanceMatrixV16 offices={offices} loans={loans} />);
+    fireEvent.click(screen.getByTestId('office-row-Charleston'));
+    const row0 = screen.getByTestId('dq-loan-row-0');
+    const cells0 = within(row0).getAllByRole('cell');
+    // Column indexes: Loan Program (3), FICO (4), AUS (5), Manual UW (6),
+    // DTI (7), LTV (8), Reserves (9), Gift/Grant (10), Pmt Shock (11),
+    // FTHB (12).
+    expect(cells0[3].textContent?.trim()).toBe('FHA'); // LoanProgram default in fixture
+    expect(cells0[5].textContent?.trim()).toBe('DU');  // AUSType default in fixture
+    expect(cells0[12].textContent?.trim()).toBe('Y');  // FTHB default in fixture
+  });
+
+  // ── PR-D.3 issue 4 — EG-caught DQ loan highlight ─────────────────
+
+  it('EG-caught loan (isBoost && failsEnhancedGuidelines) renders with bg-risk-red-bg on its row (issue 4)', () => {
+    // Custom fixture: one Boost loan flagged as failing EG, one not.
+    const officesLocal = [makeOffice('EGCity', { totalCR: 250, totalLoans: 10, totalDLQ: 2 })];
+    const loansLocal = [
+      makeLoan('EGCity', true, {
+        LoanNumber: 'EG1',
+        DPAProgram: 'Boost',
+        isBoost: true,
+        isDPA: true,
+        failsEnhancedGuidelines: true,
+      }),
+      makeLoan('EGCity', true, {
+        LoanNumber: 'EG2',
+        DPAProgram: 'Non-DPA',
+        isBoost: false,
+        failsEnhancedGuidelines: false,
+      }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-EGCity'));
+    const row0 = screen.getByTestId('dq-loan-row-0');
+    expect(row0.className).toMatch(/bg-risk-red-bg/);
+    const row1 = screen.getByTestId('dq-loan-row-1');
+    expect(row1.className).not.toMatch(/bg-risk-red-bg/);
+  });
+
+  it('EG-caught loan renders a red asterisk in the Loan # cell (issue 4)', () => {
+    const officesLocal = [makeOffice('EGCity', { totalCR: 250, totalLoans: 10, totalDLQ: 1 })];
+    const loansLocal = [
+      makeLoan('EGCity', true, {
+        LoanNumber: '91240030846',
+        DPAProgram: 'Boost',
+        isBoost: true,
+        isDPA: true,
+        failsEnhancedGuidelines: true,
+      }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-EGCity'));
+    const marker = screen.getByTestId('dq-loan-eg-marker-0');
+    expect(marker.textContent?.trim()).toBe('*');
+    expect(marker.className).toMatch(/text-risk-red/);
+    expect(marker.className).toMatch(/font-semibold/);
+    // Cell should still carry the loan number after the asterisk.
+    const cell = screen.getByTestId('dq-loan-loannumber-cell-0');
+    expect(cell.textContent?.trim()).toBe('*91240030846');
+  });
+
+  it('EG footnote renders when at least one EG-caught loan is in the table (issue 4)', () => {
+    const officesLocal = [makeOffice('EGCity', { totalCR: 250, totalLoans: 10, totalDLQ: 1 })];
+    const loansLocal = [
+      makeLoan('EGCity', true, {
+        LoanNumber: 'EG1',
+        DPAProgram: 'Boost',
+        isBoost: true,
+        isDPA: true,
+        failsEnhancedGuidelines: true,
+      }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-EGCity'));
+    const footnote = screen.getByTestId('dq-loan-eg-footnote');
+    expect(footnote).toBeTruthy();
+    expect(footnote.textContent).toContain('Highlighted loans would have been removed under Enhanced Guidelines');
+    // Smaller/italic styling per spec.
+    expect(footnote.className).toMatch(/text-xs/);
+    expect(footnote.className).toMatch(/italic/);
+    expect(footnote.className).toMatch(/text-muted-foreground/);
+  });
+
+  it('EG footnote does NOT render when no EG-caught loans exist in the table (issue 4)', () => {
+    const officesLocal = [makeOffice('NoEGCity', { totalCR: 250, totalLoans: 10, totalDLQ: 2 })];
+    const loansLocal = [
+      makeLoan('NoEGCity', true, {
+        LoanNumber: 'A',
+        DPAProgram: 'Non-DPA',
+        isBoost: false,
+        failsEnhancedGuidelines: false,
+      }),
+      // Boost but does NOT fail EG — should not trigger the footnote.
+      makeLoan('NoEGCity', true, {
+        LoanNumber: 'B',
+        DPAProgram: 'Boost',
+        isBoost: true,
+        isDPA: true,
+        failsEnhancedGuidelines: false,
+      }),
+    ];
+    render(<PerformanceMatrixV16 offices={officesLocal} loans={loansLocal} />);
+    fireEvent.click(screen.getByTestId('office-row-NoEGCity'));
+    expect(screen.queryByTestId('dq-loan-eg-footnote')).toBeNull();
+    // Neither row should carry the red-bg class.
+    const row0 = screen.getByTestId('dq-loan-row-0');
+    expect(row0.className).not.toMatch(/bg-risk-red-bg/);
+    const row1 = screen.getByTestId('dq-loan-row-1');
+    expect(row1.className).not.toMatch(/bg-risk-red-bg/);
   });
 });

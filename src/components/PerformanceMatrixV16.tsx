@@ -1,10 +1,32 @@
 /**
- * PerformanceMatrixV16 — PR-D unified matrix, PR-D.1 polish + PR-D.2 round-2.
+ * PerformanceMatrixV16 — PR-D unified matrix, PR-D.1 polish + PR-D.2/D.3 round-2/3.
  *
- * PR-D.2 additions (Michael's follow-up review on dev):
- *   • Alternating office-row shading (bg-muted/20 on odd office
- *     indices) — the per-tbody layout means Tailwind's `even:` selector
- *     wouldn't fire naturally, so we apply the shade via an index prop.
+ * PR-D.3 additions (Michael's second review pass on dev):
+ *   • Fix broken alternating shading (issue 1). PR-D.2 applied
+ *     `even:bg-muted/20` + an `officeIndex % 2 === 1` conditional, but
+ *     the `even:` selector never fired (each office row lives in its own
+ *     <tbody>, so `:nth-child(even)` evaluates against the office row's
+ *     position within its <tbody> — always 1, always odd). We now drop
+ *     the dead `even:` class entirely and bump the shade contrast to
+ *     `bg-muted/40` (double PR-D.2's attempt — 20% opacity was too
+ *     subtle against the card background).
+ *   • Richer detail columns in the DQ loan table (issue 2): Loan Program,
+ *     AUS, Manual UW, Gift/Grant, Pmt Shock, FTHB. New column order is
+ *     Loan# / Channel / DPA Program / Loan Program / FICO / AUS /
+ *     Manual UW / DTI / LTV / Reserves / Gift/Grant / Pmt Shock / FTHB.
+ *   • Notes column dropped from the main matrix (issue 3). v16's
+ *     "Originals — Current State" sheet had one too but it was always
+ *     blank except for the portfolio row; Michael signed off on removing
+ *     it entirely. Column count is now 25 leaf columns / 9 band groups.
+ *   • EG-caught DQ loans highlighted (issue 4). Every DQ row with
+ *     `isBoost && failsEnhancedGuidelines` gets a `bg-risk-red-bg`
+ *     background + a red `*` prepended to the loan number; a footnote
+ *     below the table names the flag when at least one such loan is
+ *     visible.
+ *
+ * PR-D.2 additions (Michael's first review on dev):
+ *   • Alternating office-row shading (see PR-D.3 note above — original
+ *     attempt didn't actually render).
  *   • Real Encompass loan numbers in the DQ expand table (LoanNumber
  *     preserved on LoanRecord; FHA case number surfaces via a title
  *     tooltip on the loan-number cell).
@@ -22,8 +44,10 @@
  *   >  like a table."
  *
  * Reference: the v16 What-If workbook, sheet
- * "Originals — Current State" (25 leaf columns + Office = 26 columns
- * total, two-row grouped header, PORTFOLIO TOTAL pinned above Albany).
+ * "Originals — Current State" (originally 25 leaf columns + Office = 26
+ * columns total; PR-D.3 removed the always-empty Notes column so we are
+ * now at 24 leaf + Office = 25 columns; two-row grouped header,
+ * PORTFOLIO TOTAL pinned above Albany).
  *
  * Design contract:
  *   • One row per office. Every office visible. No CR-band filter, no
@@ -104,8 +128,7 @@ type SortKey =
   | 'totalDPAConc'
   | 'retailDPAConc'
   | 'wsDPAConc'
-  | 'status'
-  | 'notes';
+  | 'status';
 
 // ── Trends summary for the DQ expand section (PR-D.2 issue 4) ─────────
 
@@ -255,7 +278,6 @@ interface DisplayRow {
   retailDPAConc: number | null;
   wsDPAConc: number | null;
   status: string;
-  notes: string;
 }
 
 // ── Formatters ─────────────────────────────────────────────────────────
@@ -321,9 +343,14 @@ function boostCellClasses(count: number): string {
 // ── Header spec ────────────────────────────────────────────────────────
 
 /**
- * Row-1 band headers with colspans. Must total 26 (matches leafCols).
- * `null` `label` means an empty band cell (Office / Status / Notes are
- * single-column bands with no sub-label).
+ * Row-1 band headers with colspans. Must total 25 (matches leafCols).
+ *
+ * NOTE: v16's "Originals — Current State" sheet has a Notes column
+ * (always blank except for a single portfolio-wide comment) that we
+ * deliberately drop here. PR-D.3 signed off on the removal because our
+ * loan-level data never populates a per-office note. If a future PR
+ * needs to "restore v16 shape" one-for-one, add it back — but do so
+ * knowing it will render 100% empty cells for every office row.
  */
 const bandCols: BandCol[] = [
   { label: 'Office', span: 1 },
@@ -335,17 +362,17 @@ const bandCols: BandCol[] = [
   { label: 'Revised CR', span: 3 },
   { label: 'DPA Conc%', span: 3 },
   { label: 'Status', span: 1 },
-  { label: 'Notes', span: 1 },
 ];
 
 /**
- * Leaf column spec — 26 entries in visible left-to-right order.
+ * Leaf column spec — 25 entries in visible left-to-right order (PR-D.3
+ * dropped the trailing `notes` column; see bandCols comment above).
  *
  * Formatting notes:
  *   • CR / Revised CR: integer via Math.round (v16 pattern).
  *   • Loans / DQ / DLQ Breakdown / Removed: integer (already whole).
  *   • DPA Conc%: 1 decimal place (Atlanta 45.9, Albany 15.6 in v16).
- *   • Status / Notes: string.
+ *   • Status: string.
  */
 const leafCols: LeafCol[] = [
   { key: 'name', label: '', numeric: false, format: (r) => r.name },
@@ -373,7 +400,6 @@ const leafCols: LeafCol[] = [
   { key: 'retailDPAConc', label: 'Ret', numeric: true, format: (r) => nOrDash(r.retailDPAConc, 1) },
   { key: 'wsDPAConc', label: 'WS', numeric: true, format: (r) => nOrDash(r.wsDPAConc, 1) },
   { key: 'status', label: '', numeric: false, format: (r) => r.status },
-  { key: 'notes', label: '', numeric: false, format: (r) => r.notes },
 ];
 
 // Sanity — enforce the spec at module load. Cheap, and it means the
@@ -441,7 +467,6 @@ function computePortfolioRow(offices: OfficeSummary[]): DisplayRow {
     retailDPAConc: weighted((o) => o.retailDPAConc, (o) => o.retailLoans),
     wsDPAConc: weighted((o) => o.wsDPAConc, (o) => o.wsLoans),
     status: 'Safe',
-    notes: 'Portfolio-wide',
   };
 }
 
@@ -477,7 +502,6 @@ function officeToRow(o: OfficeSummary): DisplayRow {
     retailDPAConc: o.retailDPAConc,
     wsDPAConc: o.wsDPAConc,
     status: statusFromCR(o.totalCR),
-    notes: '',
   };
 }
 
@@ -537,22 +561,36 @@ function compareDefault(a: DisplayRow, b: DisplayRow): number {
  * office's DQ loans and shows the columns most useful for spotting
  * concentration risk.
  *
- * PR-D.2 changes:
- *   • First column is now "Loan #" (real Encompass loan number preserved
- *     on ParsedLoan.LoanNumber). Renders in font-mono; missing values
+ * PR-D.3 changes (issue 2 + issue 4):
+ *   • Column count grew from 7 to 13. Order: Loan# | Channel |
+ *     DPA Program | Loan Program | FICO | AUS | Manual UW | DTI | LTV |
+ *     Reserves | Gift/Grant | Pmt Shock | FTHB. Numeric columns are
+ *     right-aligned, string columns left-aligned. Manual UW renders as
+ *     a red-bold `Yes` when true and blank when false; Gift/Grant as a
+ *     yellow `Yes`; Pmt Shock renders as `N%` (rounded) or em-dash when
+ *     0 or missing.
+ *   • EG-caught loans (`isBoost && failsEnhancedGuidelines`) get a
+ *     `bg-risk-red-bg` row background and a superscript red `*` prepended
+ *     to the loan-number cell content. A footnote below the table names
+ *     the flag; it only renders when at least one such loan is present.
+ *
+ * PR-D.2 changes (retained):
+ *   • First column is "Loan #" (real Encompass loan number from
+ *     ParsedLoan.LoanNumber). Renders in font-mono; missing values
  *     collapse to em-dash rather than throwing.
- *   • FHA case number rides along as a native `title` tooltip on the
- *     loan-number cell so hovering surfaces it without eating a whole
- *     column of horizontal space.
- *   • The Status column is gone — every row here is delinquent by
- *     construction, so "Yes" everywhere was zero signal.
- *   • aria-label on the loan-number cell now includes the real loan
- *     number so screen-reader announcements match what's on screen.
+ *   • FHA case number rides as a native `title` tooltip on the
+ *     loan-number cell.
+ *   • Status column is gone — every row here is delinquent by
+ *     construction.
+ *   • aria-label on the loan-number cell includes the real loan number.
  */
 function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
   if (loans.length === 0) {
     return <div className="text-sm text-muted-foreground italic py-2">No delinquent loans in this office.</div>;
   }
+  // Compute this once — controls both the row-highlight predicate and
+  // the footnote's visibility.
+  const anyEGHighlighted = loans.some(l => l.isBoost && l.failsEnhancedGuidelines);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs border-collapse" data-testid="dq-loan-table">
@@ -561,10 +599,16 @@ function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
             <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-loannumber-header">Loan #</th>
             <th className="text-left px-2 py-1 border-b">Channel</th>
             <th className="text-left px-2 py-1 border-b">DPA Program</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-loanprogram-header">Loan Program</th>
             <th className="text-right px-2 py-1 border-b">FICO</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-aus-header">AUS</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-manualuw-header">Manual UW</th>
             <th className="text-right px-2 py-1 border-b">DTI</th>
             <th className="text-right px-2 py-1 border-b">LTV</th>
             <th className="text-right px-2 py-1 border-b">Reserves</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-giftgrant-header">Gift/Grant</th>
+            <th className="text-right px-2 py-1 border-b" data-testid="dq-loan-pmtshock-header">Pmt Shock</th>
+            <th className="text-left px-2 py-1 border-b" data-testid="dq-loan-fthb-header">FTHB</th>
           </tr>
         </thead>
         <tbody>
@@ -578,27 +622,73 @@ function DQLoanBreakdown({ loans }: { loans: ParsedLoan[] }) {
             // Include the FHA case number in the title tooltip when we
             // have it — hovering the loan number reveals HUD's case ID.
             const title = l.FHACaseNumber ? `FHA case ${l.FHACaseNumber}` : undefined;
+            // Issue 4 — EG-caught highlight. Both fields already live on
+            // ParsedLoan; the flag surfaces the loans Enhanced Guidelines
+            // would have removed so committee can eyeball coverage.
+            const isEGHighlighted = l.isBoost && l.failsEnhancedGuidelines;
+            const pmtShockRaw = l.PaymentShock;
+            const pmtShockDisplay =
+              !pmtShockRaw || Number.isNaN(pmtShockRaw) ? '—' : `${Math.round(pmtShockRaw)}%`;
             return (
-              <tr key={i} className="hover:bg-muted/20">
+              <tr
+                key={i}
+                className={`hover:bg-muted/20 ${isEGHighlighted ? 'bg-risk-red-bg' : ''}`.trim()}
+                data-testid={`dq-loan-row-${i}`}
+              >
                 <td
                   className="px-2 py-1 border-b font-mono"
                   aria-label={aria}
                   title={title}
                   data-testid={`dq-loan-loannumber-cell-${i}`}
                 >
+                  {isEGHighlighted && (
+                    <span
+                      className="text-risk-red font-semibold"
+                      data-testid={`dq-loan-eg-marker-${i}`}
+                    >
+                      *
+                    </span>
+                  )}
                   {displayLoanNo}
                 </td>
                 <td className="px-2 py-1 border-b">{l.channelType}</td>
                 <td className="px-2 py-1 border-b">{l.DPAProgram || 'Non-DPA'}</td>
+                <td className="px-2 py-1 border-b">{l.LoanProgram || '—'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.FICO || '—'}</td>
+                <td className="px-2 py-1 border-b">{l.AUSType || '—'}</td>
+                <td className="px-2 py-1 border-b">
+                  {l.HasManualUW ? (
+                    <span className="text-risk-red font-semibold">Yes</span>
+                  ) : (
+                    ''
+                  )}
+                </td>
                 <td className="px-2 py-1 border-b text-right">{l.DTIBackEndGroup || '—'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.LTVGroup || '—'}</td>
                 <td className="px-2 py-1 border-b text-right">{l.ReserveMonths ?? '—'}</td>
+                <td className="px-2 py-1 border-b">
+                  {l.HasGiftGrant ? (
+                    <span className="text-risk-yellow">Yes</span>
+                  ) : (
+                    ''
+                  )}
+                </td>
+                <td className="px-2 py-1 border-b text-right">{pmtShockDisplay}</td>
+                <td className="px-2 py-1 border-b">{l.FTHB || '—'}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {anyEGHighlighted && (
+        <p
+          className="text-xs text-muted-foreground italic mt-2"
+          data-testid="dq-loan-eg-footnote"
+        >
+          * Highlighted loans would have been removed under Enhanced Guidelines
+          (Boost DPA loans failing EG predicates).
+        </p>
+      )}
     </div>
   );
 }
@@ -774,23 +864,25 @@ function PerformanceMatrixV16Inner(props: InnerProps) {
     const dqLoans = row.isPortfolio ? [] : dqLoansByOffice.get(row.key) ?? [];
     const wasExpanded = !row.isPortfolio && expandedCache.has(row.key);
     const trendsSummary = row.isPortfolio ? null : (trendsSummaryByOffice.get(row.key) ?? null);
-    // PR-D.2 issue 1 — alternating row shading. Because each office row
-    // lives in its own <tbody> (so the expand row can splice below
-    // without leaking style), the CSS `:nth-child(even)` / Tailwind
-    // `even:` selector can't fire the way it would in a single <tbody>.
-    // Applying `bg-muted/20` conditionally on the 0-indexed office index
-    // is the semantic equivalent — ~5% contrast on both light and dark
-    // themes (muted with 20% opacity). PORTFOLIO TOTAL keeps its own
-    // bold-header background; expand rows already carry `bg-muted/20`
-    // themselves so no double-shade issue.
-    const evenShadeClass = !row.isPortfolio && officeIndex % 2 === 1 ? 'bg-muted/20' : '';
+    // PR-D.3 issue 1 — alternating row shading (fix for PR-D.2's dead
+    // implementation). Because each office row lives in its own <tbody>
+    // (so the expand row can splice below without leaking style), the
+    // Tailwind `even:` selector — which maps to `:nth-child(even)` on
+    // the <tr>'s <tbody> parent — always evaluated against position 1
+    // (odd) and never fired. PR-D.2 wrote both the dead `even:` class
+    // and a manual index conditional; PR-D.3 drops the `even:` and
+    // bumps the manual conditional to `bg-muted/40` because 20% opacity
+    // was too subtle to see under the card background + border weight.
+    // PORTFOLIO TOTAL keeps its own bold-header background; expand rows
+    // carry their own `bg-muted/20` and paint independently.
+    const shadeClass = !row.isPortfolio && officeIndex % 2 === 1 ? 'bg-muted/40' : '';
     return (
       <tbody key={row.key}>
         <tr
           className={
             row.isPortfolio
               ? 'font-bold bg-muted/70'
-              : `hover:bg-muted/30 cursor-pointer even:bg-muted/20 ${evenShadeClass}`.trim()
+              : `hover:bg-muted/30 cursor-pointer ${shadeClass}`.trim()
           }
           onClick={() => {
             if (!row.isPortfolio) toggleExpand(row.key);
@@ -1047,7 +1139,7 @@ export default function PerformanceMatrixV16({ offices, loans }: Props) {
     // The "none" step returns to the two-key canonical default. This is
     // computed off the current sortKey/sortDir snapshot rather than
     // inside two nested state-updaters — clearer and Strict-Mode safe.
-    const isString = k === 'name' || k === 'status' || k === 'notes';
+    const isString = k === 'name' || k === 'status';
     const firstDir: SortDir = isString ? 'asc' : 'desc';
     const flippedDir: SortDir = firstDir === 'asc' ? 'desc' : 'asc';
 
