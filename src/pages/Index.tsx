@@ -398,12 +398,12 @@ export default function Index() {
                       <div className="bg-card rounded-lg border border-border p-5">
                         <TerminationRiskCards offices={data.offices} />
                       </div>
-                      <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} />
+                      <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} snapshotMonth={selectedPeriod} />
                       {/* Credit Watch list was previously capped to top 5 via `maxRows={5}` (Apr 2026 vintage).
                           That truncated the committee's own canonical list (PDF showed 9 for April), so the
                           cap is gone — the Performance Matrix now renders every office in the (150, 200] CR
                           band with >= 100 loans. */}
-                      <PerformanceMatrix offices={data.offices} title="Credit Watch — Performance Matrix" emoji="⚠️" filterFn={o => o.totalCR > 150 && o.totalCR <= 200 && o.totalLoans >= 100} />
+                      <PerformanceMatrix offices={data.offices} title="Credit Watch — Performance Matrix" emoji="⚠️" filterFn={o => o.totalCR > 150 && o.totalCR <= 200 && o.totalLoans >= 100} snapshotMonth={selectedPeriod} />
                       <CreditWatchSimple offices={data.offices} />
                       <HUDConcentration data={data} />
                     </div>
