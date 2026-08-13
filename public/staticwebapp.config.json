@@ -63,6 +63,17 @@
       "methods": ["POST"]
     },
     {
+      "_comment": "Scenario evaluator + manual cache-purge endpoint (PR-A of Scenario Builder — docs/scenario-builder-design.md §3.2 + §9 Q11). Entra SSO only, same gate as /api/snapshot/*. Admin gate on /api/evaluate/purge is enforced inside the Function via ADMIN_ALLOWLIST.",
+      "route": "/api/evaluate/*",
+      "allowedRoles": ["authenticated"],
+      "methods": ["POST"]
+    },
+    {
+      "route": "/api/evaluate",
+      "allowedRoles": ["authenticated"],
+      "methods": ["POST"]
+    },
+    {
       "route": "/uploads",
       "allowedRoles": ["authenticated"]
     },

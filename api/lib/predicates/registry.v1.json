@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "registry_version": "v1.0.0",
+  "note": "v1 predicate registry — repo-tracked JSON. Add-a-predicate = PR + deploy. See docs/scenario-builder-design.md §3.3.",
+  "predicates": [
+    {
+      "id": "boost_membership",
+      "label": "Boost membership",
+      "family": "product_channel_membership",
+      "description": "Loans in the AFN Boost DPA program.",
+      "evaluator": "js-fn-ref",
+      "template": "boost_membership",
+      "params": [],
+      "loan_fields": ["is_boost"]
+    },
+    {
+      "id": "arrive_aurora_membership",
+      "label": "Arrive/Aurora membership",
+      "family": "product_channel_membership",
+      "description": "Loans in the Arrive/Aurora DPA program.",
+      "evaluator": "js-fn-ref",
+      "template": "arrive_aurora_membership",
+      "params": [],
+      "loan_fields": ["dpa_program"]
+    },
+    {
+      "id": "elevate_membership",
+      "label": "Elevate FHA membership",
+      "family": "product_channel_membership",
+      "description": "Loans in the Elevate FHA Loan Program (bucketed under dpa_program='Other'; match by dpa_name).",
+      "evaluator": "js-fn-ref",
+      "template": "elevate_membership",
+      "params": [],
+      "loan_fields": ["dpa_name"]
+    },
+    {
+      "id": "proprietary_dpa_membership",
+      "label": "All AFN-proprietary DPA (Boost + Arrive/Aurora + Elevate)",
+      "family": "product_channel_membership",
+      "description": "S4-scope union: Boost OR Arrive/Aurora OR Elevate FHA. v16 assertion: pairwise overlap == 0 on 2026-06.",
+      "evaluator": "js-fn-ref",
+      "template": "proprietary_dpa_membership",
+      "params": [],
+      "loan_fields": ["is_boost", "dpa_program", "dpa_name"]
+    },
+    {
+      "id": "fico_lt_580",
+      "label": "FICO < 580",
+      "family": "credit_score_threshold",
+      "description": "Origination-time FICO below configured threshold (default 580).",
+      "evaluator": "js-fn-ref",
+      "template": "fico_lt",
+      "params": [
+        { "name": "threshold", "type": "int", "default": 580 }
+      ],
+      "loan_fields": ["fico_score"]
+    },
+    {
+      "id": "fico_lt_620",
+      "label": "FICO < 620",
+      "family": "credit_score_threshold",
+      "description": "Origination-time FICO below configured threshold (default 620).",
+      "evaluator": "js-fn-ref",
+      "template": "fico_lt",
+      "params": [
+        { "name": "threshold", "type": "int", "default": 620 }
+      ],
+      "loan_fields": ["fico_score"]
+    },
+    {
+      "id": "fico_lt_660",
+      "label": "FICO < 660",
+      "family": "credit_score_threshold",
+      "description": "Origination-time FICO below configured threshold (default 660).",
+      "evaluator": "js-fn-ref",
+      "template": "fico_lt",
+      "params": [
+        { "name": "threshold", "type": "int", "default": 660 }
+      ],
+      "loan_fields": ["fico_score"]
+    },
+    {
+      "id": "dti_gt_50",
+      "label": "DTI back-end > 50%",
+      "family": "dti_threshold",
+      "description": "Back-end DTI above configured threshold (default 50).",
+      "evaluator": "js-fn-ref",
+      "template": "dti_gt",
+      "params": [
+        { "name": "threshold", "type": "float", "default": 50 }
+      ],
+      "loan_fields": ["back_dti", "has_super_50_dti"]
+    },
+    {
+      "id": "ltv_gt_95",
+      "label": "LTV > 95%",
+      "family": "ltv_threshold",
+      "description": "Loan-to-value above configured threshold (default 95).",
+      "evaluator": "js-fn-ref",
+      "template": "ltv_gt",
+      "params": [
+        { "name": "threshold", "type": "float", "default": 95 }
+      ],
+      "loan_fields": ["ltv", "has_super_95_ltv"]
+    },
+    {
+      "id": "reserves_lt_1_mo",
+      "label": "Reserves < 1 month",
+      "family": "reserves_threshold",
+      "description": "Reserves group == '0' (i.e., no reserves).",
+      "evaluator": "js-fn-ref",
+      "template": "reserves_lt",
+      "params": [
+        { "name": "threshold", "type": "int", "default": 1 }
+      ],
+      "loan_fields": ["reserves_group", "reserves_months"]
+    },
+    {
+      "id": "gift_no_reserves",
+      "label": "Gift fund ≥ 50% source-of-funds AND no reserves",
+      "family": "gift_fund_presence",
+      "description": "Composite: gift_grant_group ∈ {'50%-74.99%', '75%+'} AND reserves_group == '0'. Default from v16 Enhanced Guidelines carve-out; registry-configurable via gift_grant_groups + reserves_group_zero params.",
+      "evaluator": "js-fn-ref",
+      "template": "gift_no_reserves",
+      "params": [
+        { "name": "gift_grant_groups", "type": "enum_list", "default": ["50%–74.99%", "75%+", "50%-74.99%"] },
+        { "name": "reserves_group_zero", "type": "string", "default": "0" }
+      ],
+      "loan_fields": ["gift_grant_group", "reserves_group"]
+    },
+    {
+      "id": "fails_enhanced_guidelines",
+      "label": "Fails Enhanced Guidelines (Boost only)",
+      "family": "composite_eg",
+      "description": "v16 Enhanced Guidelines carve-out. **Boost-only scope** per snapshot-side EG flag (docs/scenario-builder-design.md §9 Q3). Uses the snapshot's fails_enhanced_guidelines field, which is populated for Boost loans only.",
+      "evaluator": "js-fn-ref",
+      "template": "fails_enhanced_guidelines",
+      "params": [],
+      "loan_fields": ["fails_enhanced_guidelines"],
+      "scope_note": "Fires on Boost membership only. Committee-wide EG evaluation across all proprietary DPA would require Encompass upstream changes."
+    },
+    {
+      "id": "manual_uw",
+      "label": "Manual underwriting",
+      "family": "underwriting",
+      "description": "Loans originated via manual underwriting (not AUS-approved). v16 S3/S4 removes these.",
+      "evaluator": "js-fn-ref",
+      "template": "manual_uw",
+      "params": [],
+      "loan_fields": ["has_manual_uw"]
+    },
+    {
+      "id": "front_dti_tiered_cap",
+      "label": "Front-end DTI over FICO-tiered cap (35% if FICO 660-699, 42% if FICO 700+)",
+      "family": "dti_threshold",
+      "description": "v16 S3/S4 tiered front-end DTI cap: FICO 660-699 must have front-end DTI \u2264 35%; FICO \u2265700 must have front-end DTI \u2264 42%. Fires when the loan's front-end DTI exceeds the applicable cap. Loans with FICO<660 (or FICO=None) are excluded here (they are caught by fico_lt_660 or by the compound boost_dti_tiered_v16 predicate).",
+      "evaluator": "js-fn-ref",
+      "template": "front_dti_tiered_cap",
+      "params": [
+        { "name": "low_tier_min_fico", "type": "int", "default": 660 },
+        { "name": "low_tier_max_fico", "type": "int", "default": 699 },
+        { "name": "low_tier_front_dti_cap", "type": "float", "default": 35 },
+        { "name": "high_tier_min_fico", "type": "int", "default": 700 },
+        { "name": "high_tier_front_dti_cap", "type": "float", "default": 42 }
+      ],
+      "loan_fields": ["fico_score", "front_dti"]
+    },
+    {
+      "id": "boost_dti_tiered_v16",
+      "label": "v16 Boost Guidelines Tightening — FICO/front-DTI ladder (rule 1+2+3)",
+      "family": "composite_v16_boost_guidelines",
+      "description": "v16 R002 (S3/S4) rule set — the three FICO branches encoded as ONE compound predicate to match the workbook language: '(1) FICO<660 or None; (2) FICO 660-699 with front-end DTI >35.0%; (3) FICO 700+ with front-end DTI >42.0%'. Fires when ANY of the three branches is true for a loan. Branch (1) matches missing/null FICO because v16 R002 says 'or None' explicitly; branches (2)/(3) require finite FICO and finite front_dti. Front-end DTI stored as percentage (e.g. 35.0), compared with > (strict, per v16 language 'greater than 35.0%').",
+      "evaluator": "js-fn-ref",
+      "template": "boost_dti_tiered_v16",
+      "params": [
+        { "name": "low_fico_threshold", "type": "int", "default": 660 },
+        { "name": "mid_tier_min_fico", "type": "int", "default": 660 },
+        { "name": "mid_tier_max_fico", "type": "int", "default": 699 },
+        { "name": "mid_tier_front_dti_cap", "type": "float", "default": 35.0 },
+        { "name": "high_tier_min_fico", "type": "int", "default": 700 },
+        { "name": "high_tier_front_dti_cap", "type": "float", "default": 42.0 }
+      ],
+      "loan_fields": ["fico_score", "front_dti"],
+      "source_note": "v16 workbook 'S3 Committee \u2014 Boost Guidelines' R002 (verbatim): 'Boost Guidelines Tightening + persistent EG carve-out. Remove Boost loans that fail ANY of: (1) FICO<660 or None; (2) FICO 660-699 with front-end DTI >35.0%; (3) FICO 700+ with front-end DTI >42.0%; (4) uses manual underwriting; (5) fails Enhanced Guidelines (persistent carve-out, no delinquency qualifier). Non-Boost loans unaffected.' This predicate encodes branches (1)+(2)+(3) as a single unit. Branches (4)/(5) remain separate leaves (manual_uw, fails_enhanced_guidelines)."
+    }
+  ]
+}
