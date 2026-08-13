@@ -1,3 +1,10 @@
+/**
+ * @deprecated Superseded by `PerformanceMatrixV16` (PR-D). Michael's
+ * unified v16-shaped matrix folds the Credit Watch list back into a
+ * single all-offices table (PORTFOLIO TOTAL + every office row visible,
+ * sortable, expandable). Left in place so the PR-D diff is small and
+ * rollback is a two-line revert in Index.tsx.
+ */
 import { useState, useMemo } from 'react';
 import { ArrowUpDown, Download } from 'lucide-react';
 import type { OfficeSummary } from '@/lib/types';

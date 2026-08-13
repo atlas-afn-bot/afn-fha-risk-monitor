@@ -9,8 +9,12 @@ import type { HUDMonthlySnapshot } from '@/lib/hudHistory';
 import SummaryCards from '@/components/SummaryCards';
 import TrendChart from '@/components/TrendChart';
 import HUDConcentration from '@/components/HUDConcentration';
-import PerformanceMatrix from '@/components/PerformanceMatrix';
-import CreditWatchSimple from '@/components/CreditWatchSimple';
+import PerformanceMatrixV16 from '@/components/PerformanceMatrixV16';
+// NOTE: The old `PerformanceMatrix` + `CreditWatchSimple` renders were
+// replaced in PR-D by the unified v16-shaped matrix below. Both source
+// files are intentionally left in the repo (marked @deprecated) so the
+// PR-D diff is trivial to roll back if committee review rejects the
+// new layout. Do not re-import them without talking to Michael first.
 import PortfolioComposition from '@/components/PortfolioComposition';
 import DPAProviderTable from '@/components/DPAProviderTable';
 import ChannelAnalysis from '@/components/ChannelAnalysis';
@@ -398,13 +402,12 @@ export default function Index() {
                       <div className="bg-card rounded-lg border border-border p-5">
                         <TerminationRiskCards offices={data.offices} />
                       </div>
-                      <PerformanceMatrix offices={data.offices} title="Termination Risk Offices — Performance Matrix" emoji="🚨" filterFn={o => o.totalCR > 200 && o.totalLoans > 100} snapshotMonth={selectedPeriod} />
-                      {/* Credit Watch list was previously capped to top 5 via `maxRows={5}` (Apr 2026 vintage).
-                          That truncated the committee's own canonical list (PDF showed 9 for April), so the
-                          cap is gone — the Performance Matrix now renders every office in the (150, 200] CR
-                          band with >= 100 loans. */}
-                      <PerformanceMatrix offices={data.offices} title="Credit Watch — Performance Matrix" emoji="⚠️" filterFn={o => o.totalCR > 150 && o.totalCR <= 200 && o.totalLoans >= 100} snapshotMonth={selectedPeriod} />
-                      <CreditWatchSimple offices={data.offices} />
+                      {/* PR-D: single unified v16-shaped matrix replaces
+                          the two prior PerformanceMatrix renders + the
+                          CreditWatchSimple table. Every office is
+                          visible; PORTFOLIO TOTAL is pinned at top;
+                          rows expand to a DQ-loan breakdown. */}
+                      <PerformanceMatrixV16 offices={data.offices} loans={data.loans} />
                       <HUDConcentration data={data} />
                     </div>
                   )}

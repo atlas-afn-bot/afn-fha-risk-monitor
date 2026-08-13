@@ -1,4 +1,10 @@
 /**
+ * @deprecated Superseded by `PerformanceMatrixV16` (PR-D). Michael rejected
+ * this PR-B layout in review; the unified v16-shaped matrix replaces both
+ * this component and `CreditWatchSimple`. Left in place so the PR-D diff
+ * is a strict addition and rollback is a two-line revert in Index.tsx.
+ * Do not import or extend this component going forward.
+ *
  * PerformanceMatrix — reformatted per PR-B (docs/scenario-builder-design.md §4).
  *
  * Ships against the PR-A `POST /api/evaluate` contract. The matrix is one
